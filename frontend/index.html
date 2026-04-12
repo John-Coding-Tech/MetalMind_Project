@@ -1,0 +1,173 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>MetalMind — ACP Supplier Intelligence</title>
+  <link rel="stylesheet" href="/static/styles.css" />
+</head>
+<body>
+
+  <!-- HEADER -->
+  <header class="header">
+    <div class="container header-inner">
+      <div class="logo">
+        <span class="logo-icon">M</span>
+        <span class="logo-text">MetalMind</span>
+      </div>
+      <div class="header-tagline">ACP Supplier Intelligence</div>
+    </div>
+  </header>
+
+  <div class="layout container">
+
+    <!-- SIDEBAR -->
+    <aside class="sidebar">
+      <h3 class="sidebar-title">Settings</h3>
+
+      <div class="form-group">
+        <label for="max-results">Results per country</label>
+        <div class="range-row">
+          <input type="range" id="max-results" min="3" max="15" value="8" oninput="document.getElementById('max-results-val').textContent=this.value" />
+          <span id="max-results-val">8</span>
+        </div>
+      </div>
+
+      <div class="form-group">
+        <label for="priority">Country Priority</label>
+        <select id="priority">
+          <option value="India">India</option>
+          <option value="China">China</option>
+          <option value="Both Equal">Both Equal</option>
+        </select>
+      </div>
+
+      <div class="divider"></div>
+      <p class="section-label">Currency</p>
+
+      <div class="form-group">
+        <label for="currency">Display in</label>
+        <select id="currency" onchange="toggleFxRow()">
+          <option value="AUD">AUD (A$)</option>
+          <option value="USD">USD ($)</option>
+        </select>
+      </div>
+
+      <div class="form-group" id="fx-row">
+        <label for="usd-to-aud">USD → AUD Rate</label>
+        <input type="number" id="usd-to-aud" value="1.58" min="0.5" max="5" step="0.01" />
+      </div>
+
+      <button class="btn-primary btn-full" id="run-btn" onclick="runComparison()">
+        Run AI Comparison
+      </button>
+
+      <div class="divider"></div>
+      <p class="risk-note">Risk &gt; Price — never recommends cheapest blindly.</p>
+    </aside>
+
+    <!-- MAIN -->
+    <main class="main-content">
+
+      <!-- IDLE -->
+      <div id="idle-state" class="state-panel">
+        <div class="idle-icon">&#9883;</div>
+        <h2>ACP Supplier Comparison</h2>
+        <p>Configure your settings and click <strong>Run AI Comparison</strong> to find the best-value, lowest-risk ACP supplier from India and China.</p>
+        <div class="how-it-works">
+          <div class="step-pill">01 Search via Tavily</div>
+          <div class="step-arrow">→</div>
+          <div class="step-pill">02 Clean Data</div>
+          <div class="step-arrow">→</div>
+          <div class="step-pill">03 Risk Score</div>
+          <div class="step-arrow">→</div>
+          <div class="step-pill">04 Value Score</div>
+          <div class="step-arrow">→</div>
+          <div class="step-pill">05 Rank</div>
+          <div class="step-arrow">→</div>
+          <div class="step-pill">06 Recommend</div>
+        </div>
+      </div>
+
+      <!-- LOADING -->
+      <div id="loading-state" class="state-panel" style="display:none;">
+        <div class="spinner"></div>
+        <p id="loading-msg" class="loading-msg">Searching suppliers...</p>
+        <div class="progress-steps" id="progress-steps"></div>
+      </div>
+
+      <!-- ERROR -->
+      <div id="error-state" class="state-panel" style="display:none;">
+        <div class="error-icon">&#9888;</div>
+        <p id="error-msg">Something went wrong.</p>
+        <button class="btn-secondary" onclick="showIdle()">Try Again</button>
+      </div>
+
+      <!-- RESULTS -->
+      <div id="results-state" style="display:none;">
+
+        <!-- Recommendation Card -->
+        <section class="card winner-card">
+          <div class="winner-badge">Recommended</div>
+          <div class="winner-header">
+            <div>
+              <h2 id="winner-name"></h2>
+              <span class="country-tag" id="winner-country"></span>
+            </div>
+            <div class="winner-metrics">
+              <div class="metric">
+                <div class="metric-label">Est. Price</div>
+                <div class="metric-value" id="winner-price"></div>
+              </div>
+              <div class="metric">
+                <div class="metric-label">Risk Level</div>
+                <div class="metric-value" id="winner-risk"></div>
+              </div>
+              <div class="metric">
+                <div class="metric-label">Value Score</div>
+                <div class="metric-value" id="winner-score"></div>
+              </div>
+            </div>
+          </div>
+          <div class="winner-explanation" id="winner-explanation"></div>
+          <details class="risk-details">
+            <summary>Risk Details</summary>
+            <pre id="winner-risk-note"></pre>
+          </details>
+        </section>
+
+        <!-- Top 3 -->
+        <section>
+          <h3 class="section-heading">Top 3 Suppliers</h3>
+          <div id="top3-cards" class="top3-grid"></div>
+        </section>
+
+        <!-- All Suppliers Table -->
+        <section>
+          <h3 class="section-heading">All Suppliers Found</h3>
+          <div class="table-wrapper">
+            <table class="supplier-table">
+              <thead>
+                <tr>
+                  <th>#</th>
+                  <th>Supplier</th>
+                  <th>Country</th>
+                  <th>Est. Price</th>
+                  <th>Risk</th>
+                  <th>Value Score</th>
+                  <th>URL</th>
+                </tr>
+              </thead>
+              <tbody id="all-tbody"></tbody>
+            </table>
+          </div>
+        </section>
+
+      </div><!-- /results -->
+
+    </main>
+  </div><!-- /layout -->
+
+  <script src="/static/app.js"></script>
+</body>
+</html>
