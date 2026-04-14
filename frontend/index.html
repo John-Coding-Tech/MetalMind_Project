@@ -11,85 +11,132 @@
   <!-- HEADER -->
   <header class="header">
     <div class="header-inner">
-      <div class="logo">
-        <span class="logo-icon">M</span>
-        <span class="logo-text">MetalMind</span>
+      <a href="/" class="logo" aria-label="MetalMind AI home">
+        <img src="/static/Images/Metal_Logo.jpeg" alt="MetalMind AI" class="logo-img" />
+      </a>
+      <div class="header-right">
+        <span class="header-tagline">ACP Supplier Intelligence</span>
       </div>
-      <div class="header-tagline">ACP Supplier Intelligence</div>
     </div>
   </header>
 
-  <!-- APP SHELL: sidebar + main as full-viewport grid -->
+  <!-- APP SHELL: single-column main content (sidebar removed) -->
   <div class="app-layout">
-
-    <!-- SIDEBAR -->
-    <aside class="sidebar">
-      <p class="sidebar-title">Settings</p>
-
-      <div class="form-group">
-        <label for="max-results">Results per country</label>
-        <div class="range-row">
-          <input type="range" id="max-results" min="3" max="15" value="8" oninput="document.getElementById('max-results-val').textContent=this.value" />
-          <span id="max-results-val">8</span>
-        </div>
-      </div>
-
-      <div class="form-group">
-        <label for="priority">Country Priority</label>
-        <select id="priority">
-          <option value="India">India</option>
-          <option value="China">China</option>
-          <option value="Both Equal">Both Equal</option>
-        </select>
-      </div>
-
-      <div class="sidebar-divider"></div>
-      <p class="section-label">Currency</p>
-
-      <div class="form-group">
-        <label for="currency">Display in</label>
-        <select id="currency" onchange="toggleFxRow()">
-          <option value="AUD">AUD (A$)</option>
-          <option value="USD">USD ($)</option>
-        </select>
-      </div>
-
-      <div class="form-group" id="fx-row">
-        <label for="usd-to-aud">USD → AUD Rate</label>
-        <input type="number" id="usd-to-aud" value="1.58" min="0.5" max="5" step="0.01" />
-      </div>
-
-      <button class="btn-primary btn-full" id="run-btn" onclick="runComparison()">
-        Run AI Comparison
-      </button>
-
-      <div class="sidebar-footer">
-        <p class="risk-note">Risk &gt; Price — never recommends cheapest blindly.</p>
-      </div>
-    </aside>
 
     <!-- MAIN -->
     <main class="main-content">
       <div class="main-inner">
 
-        <!-- IDLE -->
-        <div id="idle-state" class="state-panel">
-          <div class="idle-icon">&#9883;</div>
-          <h2>ACP Supplier Comparison</h2>
-          <p>Configure your settings and click <strong>Run AI Comparison</strong> to find the best-value, lowest-risk ACP supplier from India and China.</p>
-          <div class="how-it-works">
-            <div class="step-pill">01 Search via Tavily</div>
-            <div class="step-arrow">→</div>
-            <div class="step-pill">02 Clean Data</div>
-            <div class="step-arrow">→</div>
-            <div class="step-pill">03 Risk Score</div>
-            <div class="step-arrow">→</div>
-            <div class="step-pill">04 Value Score</div>
-            <div class="step-arrow">→</div>
-            <div class="step-pill">05 Rank</div>
-            <div class="step-arrow">→</div>
-            <div class="step-pill">06 Recommend</div>
-          </div>
+        <!-- Back link — only visible on analysis pages (body.analysis-mode) -->
+        <a class="back-link" href="/">&larr; Back to mode selection</a>
+
+        <!-- IDLE / LANDING -->
+        <div id="idle-state" class="landing">
+
+          <section class="landing-hero">
+            <h1 class="landing-title">
+              Find the <span class="accent-grad">best-value, lowest-risk</span> ACP supplier
+              <span class="landing-title-tail">across India &amp; China</span>
+            </h1>
+            <button type="button" class="principle-badge" id="principle-badge" aria-label="Learn what 'Risk greater than Price' means">
+              <span class="principle-badge-icon">⚖️</span>
+              <span class="principle-badge-key">Risk &gt; Price</span>
+              <span class="principle-badge-sep">·</span>
+              <span class="principle-badge-cta">Learn more</span>
+              <span class="principle-badge-arrow">→</span>
+            </button>
+            <p class="landing-helper">
+              Pick a country priority, then choose an analysis mode. Prices in AUD (A$).
+            </p>
+          </section>
+
+          <section class="priority-bar" aria-label="Country priority">
+            <span class="priority-bar-label">Country Priority</span>
+            <div class="priority-pills" role="radiogroup">
+              <button type="button" class="priority-pill is-active" data-value="Both Equal" role="radio" aria-checked="true">Both Equal</button>
+              <button type="button" class="priority-pill" data-value="India" role="radio" aria-checked="false">India</button>
+              <button type="button" class="priority-pill" data-value="China" role="radio" aria-checked="false">China</button>
+            </div>
+          </section>
+
+          <section class="mode-grid">
+
+            <!-- Rule-based -->
+            <button type="button" class="mode-card mode-rule" onclick="goToAnalysis('rule')">
+              <div class="mode-card-head">
+                <span class="mode-badge">01</span>
+                <span class="mode-tag">Fast · Deterministic</span>
+              </div>
+              <h3 class="mode-card-title">Calculation-Based Analysis</h3>
+              <p class="mode-card-desc">
+                Rule-driven risk and value scoring from hard data — prices, domain signals,
+                relevance. No AI, fully reproducible.
+              </p>
+              <ul class="mode-card-bullets">
+                <li>Tavily search + risk rules</li>
+                <li>Value score (0–100)</li>
+                <li>Top 3 + full ranked list</li>
+              </ul>
+              <div class="mode-card-cta">Run analysis <span class="cta-arrow">→</span></div>
+            </button>
+
+            <!-- AI-only -->
+            <button type="button" class="mode-card mode-ai" onclick="goToAnalysis('ai')">
+              <div class="mode-card-head">
+                <span class="mode-badge">02</span>
+                <span class="mode-tag">LLM Reasoning</span>
+              </div>
+              <h3 class="mode-card-title">AI Analysis</h3>
+              <p class="mode-card-desc">
+                Gemma evaluates each supplier independently — prose reasoning, risk flags,
+                and a holistic score.
+              </p>
+              <ul class="mode-card-bullets">
+                <li>Per-supplier AI judgement</li>
+                <li>Natural-language reasons</li>
+                <li>Ranked by AI score</li>
+              </ul>
+              <div class="mode-card-cta">Run analysis <span class="cta-arrow">→</span></div>
+            </button>
+
+            <!-- Comparison -->
+            <button type="button" class="mode-card mode-compare" onclick="goToAnalysis('comparison')">
+              <div class="mode-card-head">
+                <span class="mode-badge">03</span>
+                <span class="mode-tag">Expert vs AI</span>
+              </div>
+              <h3 class="mode-card-title">AI Comparison</h3>
+              <p class="mode-card-desc">
+                Run rules and AI side-by-side, then cross-check. Each candidate gets a
+                green / yellow / red decision tier.
+              </p>
+              <ul class="mode-card-bullets">
+                <li>Rule + AI, reconciled</li>
+                <li>Tiered recommendation</li>
+                <li>Highest trust, slowest</li>
+              </ul>
+              <div class="mode-card-cta">Run comparison <span class="cta-arrow">→</span></div>
+            </button>
+
+          </section>
+
+          <section class="landing-pipeline">
+            <div class="landing-pipeline-label">Pipeline</div>
+            <div class="how-it-works">
+              <div class="step-pill">01 Search via Tavily</div>
+              <div class="step-arrow">→</div>
+              <div class="step-pill">02 Clean Data</div>
+              <div class="step-arrow">→</div>
+              <div class="step-pill">03 Risk Score</div>
+              <div class="step-arrow">→</div>
+              <div class="step-pill">04 Value Score</div>
+              <div class="step-arrow">→</div>
+              <div class="step-pill">05 Rank</div>
+              <div class="step-arrow">→</div>
+              <div class="step-pill">06 Recommend</div>
+            </div>
+          </section>
+
         </div>
 
         <!-- LOADING -->
@@ -109,30 +156,47 @@
         <!-- RESULTS -->
         <div id="results-state" style="display:none;">
 
-          <!-- Recommendation Card -->
-          <section class="card winner-card">
-            <div class="winner-badge">Recommended</div>
-            <div class="winner-header">
-              <div>
-                <h2 id="winner-name"></h2>
+          <!-- Hero band: mode pill + winner summary + KPI cards -->
+          <section class="card winner-card" id="winner-card">
+            <div class="winner-card-head">
+              <span class="results-mode-pill" id="results-mode-pill">
+                <span class="results-mode-pill-icon">⚖️</span>
+                <span class="results-mode-pill-text" id="results-mode-name"></span>
+              </span>
+              <span class="winner-badge" id="winner-badge">Recommended</span>
+            </div>
+
+            <div class="winner-hero">
+              <div class="winner-hero-left">
+                <h2 class="winner-name" id="winner-name"></h2>
                 <span class="country-tag" id="winner-country"></span>
               </div>
-              <div class="winner-metrics">
-                <div class="metric">
-                  <div class="metric-label">Est. Price</div>
-                  <div class="metric-value" id="winner-price"></div>
+              <div class="winner-kpis">
+                <div class="kpi">
+                  <div class="kpi-label">Est. Price</div>
+                  <div class="kpi-value" id="winner-price"></div>
                 </div>
-                <div class="metric">
-                  <div class="metric-label">Risk Level</div>
-                  <div class="metric-value" id="winner-risk"></div>
+                <div class="kpi">
+                  <div class="kpi-label">Risk Level</div>
+                  <div class="kpi-value" id="winner-risk"></div>
                 </div>
-                <div class="metric">
-                  <div class="metric-label">Value Score</div>
-                  <div class="metric-value" id="winner-score"></div>
+                <div class="kpi">
+                  <div class="kpi-label">Value Score</div>
+                  <div class="kpi-value" id="winner-score"></div>
                 </div>
               </div>
             </div>
-            <div class="winner-explanation" id="winner-explanation"></div>
+
+            <!-- Decision tier banner — AI Comparison only -->
+            <div class="decision-banner" id="winner-decision-banner" style="display:none;">
+              <div class="decision-banner-headline">
+                <span class="decision-banner-icon" id="winner-decision-icon"></span>
+                <span class="decision-banner-title" id="winner-decision-title"></span>
+              </div>
+              <div class="decision-banner-subtitle" id="winner-decision-subtitle"></div>
+            </div>
+
+            <p class="winner-explanation" id="winner-explanation"></p>
             <details class="risk-details">
               <summary>Risk Details</summary>
               <pre id="winner-risk-note"></pre>
@@ -145,25 +209,32 @@
             <div id="top3-cards" class="top3-grid"></div>
           </section>
 
-          <!-- All Suppliers Table -->
+          <!-- All Suppliers — collapsed by default -->
           <section class="results-section">
-            <h3 class="section-heading">All Suppliers Found</h3>
-            <div class="table-wrapper">
-              <table class="supplier-table">
-                <thead>
-                  <tr>
-                    <th>#</th>
-                    <th>Supplier</th>
-                    <th>Country</th>
-                    <th>Est. Price</th>
-                    <th>Risk</th>
-                    <th>Value Score</th>
-                    <th>URL</th>
-                  </tr>
-                </thead>
-                <tbody id="all-tbody"></tbody>
-              </table>
-            </div>
+            <details class="all-suppliers">
+              <summary class="all-suppliers-summary">
+                <span class="all-suppliers-label">All Suppliers Found</span>
+                <span class="all-suppliers-count" id="all-suppliers-count"></span>
+                <span class="all-suppliers-chevron">▾</span>
+              </summary>
+              <div class="table-wrapper">
+                <table class="supplier-table">
+                  <thead>
+                    <tr>
+                      <th>#</th>
+                      <th>Supplier</th>
+                      <th>Country</th>
+                      <th>Est. Price</th>
+                      <th>Risk</th>
+                      <th>Value Score</th>
+                      <th>URL</th>
+                      <th>Details</th>
+                    </tr>
+                  </thead>
+                  <tbody id="all-tbody"></tbody>
+                </table>
+              </div>
+            </details>
           </section>
 
         </div><!-- /results -->
@@ -172,6 +243,45 @@
     </main>
 
   </div><!-- /app-layout -->
+
+  <!-- Risk > Price explainer modal -->
+  <div class="modal-overlay" id="principle-modal" hidden>
+    <div class="modal" role="dialog" aria-modal="true" aria-labelledby="principle-modal-title">
+      <button type="button" class="modal-close" id="principle-modal-close" aria-label="Close">×</button>
+
+      <div class="modal-header">
+        <span class="modal-icon">⚖️</span>
+        <h2 class="modal-title" id="principle-modal-title">Risk &gt; Price</h2>
+        <p class="modal-sub">The core principle behind every MetalMind recommendation.</p>
+      </div>
+
+      <div class="modal-body">
+        <p>
+          Cheap does not mean good. A supplier offering rock-bottom pricing may
+          lack credentials, verifiable contact details, or a track record —
+          all signals of real business risk. MetalMind <strong>never</strong>
+          recommends the cheapest supplier blindly.
+        </p>
+
+        <h3 class="modal-h3">How it works</h3>
+        <ul class="modal-list">
+          <li><strong>Risk score first</strong> — each supplier is scored on website quality, certifications, contact info, reviews, country/domain consistency, <em>and suspiciously low pricing</em> (a cheap outlier is itself a risk signal).</li>
+          <li><strong>Value formula</strong> — <code>value_score = price_score × (1 − 0.6 × risk_score)</code>. Higher risk directly reduces value.</li>
+          <li><strong>Soft cap on high-risk</strong> — once risk exceeds a threshold, value is smoothly capped, so a cheap-but-risky supplier cannot outrank a safer, pricier one.</li>
+          <li><strong>Three analysis modes</strong> —
+            <em>Calculation-Based</em> (pure rule-based scoring),
+            <em>AI Analysis</em> (a standalone LLM evaluation of every supplier),
+            and <em>AI Comparison</em> (rules and AI run in parallel, reconciled into a green/yellow/red decision tier).
+          </li>
+        </ul>
+
+        <div class="modal-callout">
+          <span class="modal-callout-icon">💡</span>
+          <span><strong>Rule of thumb:</strong> If the price looks too good to be true, the risk score will usually confirm it.</span>
+        </div>
+      </div>
+    </div>
+  </div>
 
   <script src="/static/app.js"></script>
 </body>
