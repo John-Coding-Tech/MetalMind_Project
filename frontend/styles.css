@@ -2109,6 +2109,16 @@ body.modal-open { overflow: hidden; }
 }
 .ms-suggestion:hover { border-color: rgba(13,172,241,0.50); background: rgba(13,172,241,0.15); }
 
+.ms-scope-hint {
+  margin-top: 0.6rem;
+  padding: 0.5rem 0.9rem;
+  font-size: 0.8rem;
+  color: var(--accent);
+  background: var(--accent-dim);
+  border: 1px solid rgba(13,172,241,0.25);
+  border-radius: 6px;
+}
+
 /* AI Answer - shared */
 .ms-ai-loading { color: var(--muted); font-size: 0.9rem; padding: 1rem; }
 .ms-ai-error { color: var(--red); font-size: 0.9rem; padding: 1rem; }

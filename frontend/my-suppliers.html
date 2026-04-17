@@ -48,6 +48,7 @@
             <button class="ms-suggestion" onclick="useSuggestion(this)">Compare India vs China</button>
             <button class="ms-suggestion" onclick="useSuggestion(this)">Recommend the safest option</button>
           </div>
+          <div id="ai-scope-hint" class="ms-scope-hint" style="display:none;"></div>
           <div id="ai-answer" style="display:none;"></div>
         </div>
 
@@ -283,6 +284,14 @@
       const n = _compareSet.size;
       bar.style.display = n > 0 ? "flex" : "none";
       document.getElementById("compare-count").textContent = `${n} selected`;
+
+      const hint = document.getElementById("ai-scope-hint");
+      if (n > 0) {
+        hint.textContent = `AI will focus on your ${n} selected supplier${n > 1 ? "s" : ""}.`;
+        hint.style.display = "";
+      } else {
+        hint.style.display = "none";
+      }
     }
     function showCompare() {
       const items = _suppliers.filter(s => _compareSet.has(s.id));
@@ -327,10 +336,11 @@
       _highlights = [];
 
       try {
+        const selected_ids = _compareSet.size > 0 ? [..._compareSet] : null;
         const resp = await fetch("/api/ai-search", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ query }),
+          body: JSON.stringify({ query, selected_ids }),
         });
         const data = await resp.json();
 

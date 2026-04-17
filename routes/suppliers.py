@@ -34,6 +34,7 @@ class SaveSupplierRequest(BaseModel):
 
 class AiSearchRequest(BaseModel):
     query: str
+    selected_ids: list[int] | None = None
 
 
 class UpdateNoteRequest(BaseModel):
@@ -99,9 +100,19 @@ def update_notes(supplier_id: int, req: UpdateNoteRequest, db: Session = Depends
 
 @router.post("/ai-search")
 def ai_search(req: AiSearchRequest, db: Session = Depends(get_db)):
-    suppliers = db.query(SavedSupplier).all()
-    if not suppliers:
+    all_suppliers = db.query(SavedSupplier).all()
+    if not all_suppliers:
         return {"answer": "You haven't saved any suppliers yet. Run an analysis and save some suppliers first.", "results": []}
+
+    if req.selected_ids:
+        suppliers = [s for s in all_suppliers if s.id in req.selected_ids]
+        scope_note = f"The user has SELECTED {len(suppliers)} specific suppliers for comparison. Focus ONLY on these selected suppliers in your answer.\n\n"
+    else:
+        suppliers = all_suppliers
+        scope_note = ""
+
+    if not suppliers:
+        return {"answer": "No suppliers match the selection.", "results": []}
 
     supplier_data = "\n".join([
         f"- {s.supplier_name} | {s.country} | Price: {s.price_display or 'unknown'} | "
@@ -112,7 +123,7 @@ def ai_search(req: AiSearchRequest, db: Session = Depends(get_db)):
         for s in suppliers
     ])
 
-    prompt = f"""You are a supplier intelligence assistant. The user has saved these ACP suppliers:
+    prompt = f"""You are a supplier intelligence assistant. {scope_note}The user has saved these ACP suppliers:
 
 {supplier_data}
 
