@@ -24,14 +24,14 @@
     </div>
   </nav>
 
-  <a href="/my-suppliers" class="nav-my-suppliers floating-my-suppliers">My Suppliers</a>
-
   <div class="app-layout">
     <main class="main-content">
       <div class="main-inner">
 
         <!-- IDLE / LANDING -->
         <div id="idle-state" class="landing">
+
+          <a href="/my-suppliers" class="nav-my-suppliers floating-my-suppliers">My Suppliers</a>
 
           <section class="landing-hero">
             <h1 class="landing-title">
@@ -81,6 +81,10 @@
 
         <!-- RESULTS -->
         <div id="results-state" style="display:none;">
+
+          <div class="results-toolbar">
+            <a href="/my-suppliers" class="nav-my-suppliers">My Suppliers</a>
+          </div>
 
           <!-- Winner card -->
           <section class="card winner-card" id="winner-card">

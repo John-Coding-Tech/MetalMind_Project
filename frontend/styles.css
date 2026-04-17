@@ -2033,9 +2033,10 @@ body.modal-open { overflow: hidden; }
 .floating-my-suppliers {
   position: fixed;
   top: 95px;
-  right: 3rem;
+  right: 4rem;
   z-index: 50;
 }
+
 .results-back-btn {
   display: inline-flex;
   align-items: center;
