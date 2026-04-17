@@ -2025,9 +2025,14 @@ body.modal-open { overflow: hidden; }
 }
 .results-toolbar {
   display: flex;
-  justify-content: flex-end;
+  justify-content: space-between;
   align-items: center;
   margin-bottom: 1rem;
+}
+.results-toolbar .ms-back-link { margin-bottom: 0; }
+.results-toolbar .nav-my-suppliers {
+  font-size: 0.9rem;
+  padding: 0.6rem 1.4rem;
 }
 
 .floating-my-suppliers {
@@ -2035,6 +2040,8 @@ body.modal-open { overflow: hidden; }
   top: 95px;
   right: 4rem;
   z-index: 50;
+  font-size: 0.9rem;
+  padding: 0.6rem 1.4rem;
 }
 
 .results-back-btn {
@@ -2064,6 +2071,24 @@ body.modal-open { overflow: hidden; }
 
 /* ===== MY SUPPLIERS PAGE ===== */
 .ms-page { padding-top: 2rem; }
+.ms-back-link {
+  display: inline-flex;
+  align-items: center;
+  font-size: 0.9rem;
+  font-weight: 500;
+  color: var(--muted);
+  text-decoration: none;
+  padding: 0.6rem 1.4rem;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  margin-bottom: 1rem;
+  transition: all 0.2s;
+}
+.ms-back-link:hover {
+  color: var(--accent);
+  border-color: rgba(13,172,241,0.40);
+  background: var(--accent-dim);
+}
 .ms-header { margin-bottom: 1.5rem; }
 .ms-title {
   font-size: 1.75rem;
