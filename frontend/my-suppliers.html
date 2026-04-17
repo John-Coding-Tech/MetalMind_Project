@@ -255,7 +255,8 @@
 
     // ── Delete ──
     async function deleteSupplier(id) {
-      if (!confirm("Remove this supplier from your list?")) return;
+      const ok = await customConfirm("Remove this supplier from your list?");
+      if (!ok) return;
       const resp = await fetch(`/api/saved-supplier/${id}`, { method: "DELETE" });
       if (resp.ok) {
         _suppliers = _suppliers.filter(s => s.id !== id);
@@ -387,6 +388,52 @@
     wireFilters("sort-by", v => _sortBy = v);
     document.getElementById("ai-search-input").addEventListener("keydown", e => { if (e.key === "Enter") doAiSearch(); });
     loadSuppliers();
+  </script>
+
+  <!-- Confirm modal -->
+  <div class="modal-overlay" id="confirm-modal" hidden>
+    <div class="modal" role="dialog" aria-modal="true">
+      <div class="modal-header" style="border-bottom:none; padding-bottom:0;">
+        <span class="modal-icon">🗑</span>
+        <h2 class="modal-title" style="color:var(--red);" id="confirm-title">Remove Supplier</h2>
+        <p class="modal-sub" id="confirm-msg">Remove this supplier from your list?</p>
+      </div>
+      <div class="modal-body" style="display:flex; justify-content:center; gap:0.75rem; padding-top:0.5rem;">
+        <button class="btn-secondary" id="confirm-cancel">Cancel</button>
+        <button class="run-btn" id="confirm-ok" style="padding:0.6rem 2rem; background:var(--red);">
+          <span class="run-btn-text">Remove</span>
+        </button>
+      </div>
+    </div>
+  </div>
+
+  <script>
+    let _confirmResolve = null;
+    function customConfirm(msg) {
+      return new Promise(resolve => {
+        _confirmResolve = resolve;
+        document.getElementById("confirm-msg").textContent = msg;
+        document.getElementById("confirm-modal").hidden = false;
+        document.body.classList.add("modal-open");
+      });
+    }
+    document.getElementById("confirm-ok").addEventListener("click", () => {
+      document.getElementById("confirm-modal").hidden = true;
+      document.body.classList.remove("modal-open");
+      if (_confirmResolve) _confirmResolve(true);
+    });
+    document.getElementById("confirm-cancel").addEventListener("click", () => {
+      document.getElementById("confirm-modal").hidden = true;
+      document.body.classList.remove("modal-open");
+      if (_confirmResolve) _confirmResolve(false);
+    });
+    document.getElementById("confirm-modal").addEventListener("click", e => {
+      if (e.target.id === "confirm-modal") {
+        document.getElementById("confirm-modal").hidden = true;
+        document.body.classList.remove("modal-open");
+        if (_confirmResolve) _confirmResolve(false);
+      }
+    });
   </script>
 </body>
 </html>
