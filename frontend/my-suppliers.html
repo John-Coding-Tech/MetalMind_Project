@@ -49,7 +49,9 @@
             <button class="ms-suggestion" onclick="useSuggestion(this)">Recommend the safest option</button>
           </div>
           <div id="ai-scope-hint" class="ms-scope-hint" style="display:none;"></div>
+          <div id="ai-chat" class="ms-chat" style="display:none;"></div>
           <div id="ai-answer" style="display:none;"></div>
+          <button id="clear-chat-btn" class="ms-clear-chat" style="display:none;" onclick="clearChat()">Clear conversation</button>
         </div>
 
         <!-- Loading -->
@@ -101,10 +103,7 @@
         <!-- Compare bar -->
         <div id="compare-bar" class="ms-compare-bar" style="display:none;">
           <span id="compare-count">0 selected</span>
-          <button class="run-btn ms-compare-btn" onclick="showCompare()">
-            <span class="run-btn-text">Compare</span>
-          </button>
-          <button class="ms-compare-clear" onclick="clearCompare()">Clear</button>
+          <button class="ms-compare-clear" onclick="clearCompare()">Clear selection</button>
         </div>
 
         <!-- Compare panel -->
@@ -128,6 +127,7 @@
     let _sortBy = "value";
     let _compareSet = new Set();
     let _highlights = [];
+    let _chatHistory = []; // [{role, content}]
 
     // ── Load ──
     async function loadSuppliers() {
@@ -233,6 +233,7 @@
             ${s.url ? `<a href="${escapeHtml(s.url)}" target="_blank" rel="noopener" class="ms-card-url">${escapeHtml(s.url)}</a>` : "<span></span>"}
             <div class="ms-card-actions">
               <span class="ms-card-date">Saved ${new Date(s.saved_at).toLocaleDateString()}</span>
+              <button class="ms-report-btn" onclick="openReport(${s.id})">📊 AI Deep Report</button>
               <button class="ms-delete-btn" onclick="deleteSupplier(${s.id})"><span class="ms-delete-icon">🗑</span> Remove</button>
             </div>
           </div>
@@ -272,6 +273,8 @@
       if (_compareSet.has(id)) _compareSet.delete(id); else _compareSet.add(id);
       updateCompareBar();
       renderList();
+      if (_compareSet.size >= 2) showCompare();
+      else document.getElementById("compare-panel").style.display = "none";
     }
     function clearCompare() {
       _compareSet.clear();
@@ -295,7 +298,7 @@
     }
     function showCompare() {
       const items = _suppliers.filter(s => _compareSet.has(s.id));
-      if (items.length < 2) { alert("Select at least 2 suppliers to compare."); return; }
+      if (items.length < 2) return;
       const panel = document.getElementById("compare-panel");
       panel.style.display = "";
       const cols = items.map(s => {
@@ -308,10 +311,12 @@
           <div class="ms-cmp-row"><span>Risk</span><strong class="${riskCls}">${escapeHtml(s.risk_level || "—")}</strong></div>
           <div class="ms-cmp-row"><span>Risk Score</span><strong>${s.risk_score != null ? (s.risk_score * 100).toFixed(0) + "%" : "—"}</strong></div>
           <div class="ms-cmp-row"><span>Trust</span><strong>${escapeHtml((s.trust || "N/A").toUpperCase())}</strong></div>
+          ${s.url ? `<div class="ms-cmp-url"><a href="${escapeHtml(s.url)}" target="_blank" rel="noopener">${escapeHtml(s.url)}</a></div>` : ""}
+          <button class="ms-report-btn ms-cmp-report-btn" onclick="openReport(${s.id})">📊 AI Deep Report</button>
         </div>`;
       }).join("");
       panel.innerHTML = `<div class="ms-cmp-card">
-        <div class="ms-cmp-header"><span>Side-by-Side Comparison</span><button class="ms-cmp-close" onclick="this.closest('.ms-cmp-card').parentElement.style.display='none'">✕</button></div>
+        <div class="ms-cmp-header"><span>Side-by-Side Comparison</span></div>
         <div class="ms-cmp-grid">${cols}</div>
       </div>`;
       panel.scrollIntoView({ behavior: "smooth", block: "nearest" });
@@ -323,10 +328,41 @@
       doAiSearch();
     }
 
+    function renderChat() {
+      const chatEl = document.getElementById("ai-chat");
+      const clearBtn = document.getElementById("clear-chat-btn");
+      if (_chatHistory.length === 0) {
+        chatEl.style.display = "none";
+        clearBtn.style.display = "none";
+        return;
+      }
+      chatEl.style.display = "";
+      clearBtn.style.display = "";
+      chatEl.innerHTML = _chatHistory.map(t => {
+        if (t.role === "user") {
+          return `<div class="ms-chat-user"><span class="ms-chat-role">You</span><div class="ms-chat-msg">${escapeHtml(t.content)}</div></div>`;
+        }
+        return ""; // Assistant messages render via answerEl
+      }).filter(Boolean).join("");
+    }
+
+    function clearChat() {
+      _chatHistory = [];
+      _highlights = [];
+      document.getElementById("ai-answer").style.display = "none";
+      document.getElementById("ai-answer").innerHTML = "";
+      renderChat();
+      renderList();
+    }
+
     async function doAiSearch() {
       const input = document.getElementById("ai-search-input");
       const query = input.value.trim();
       if (!query) return;
+
+      _chatHistory.push({ role: "user", content: query });
+      renderChat();
+      input.value = "";
 
       const answerEl = document.getElementById("ai-answer");
       const btn = document.getElementById("ai-search-btn");
@@ -340,17 +376,34 @@
         const resp = await fetch("/api/ai-search", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ query, selected_ids }),
+          body: JSON.stringify({ query, selected_ids, history: _chatHistory.slice(0, -1) }),
         });
         const data = await resp.json();
+        // Store the assistant response as plain-text summary for history
+        const assistantText = (data.structured?.summary) || data.structured?.answer || data.answer || "";
+        _chatHistory.push({ role: "assistant", content: String(assistantText).slice(0, 500) });
 
         if (data.structured) {
           const s = data.structured;
           _highlights = s.highlights || [];
 
+          const toInfoText = (info) => {
+            if (!info) return "";
+            if (typeof info === "string") return info;
+            if (Array.isArray(info)) return info.map(toInfoText).join("\n");
+            if (typeof info === "object") {
+              return Object.entries(info).map(([k, v]) => {
+                const label = String(k).replace(/_/g, " ");
+                if (typeof v === "object") return `${label}:\n${toInfoText(v).split("\n").map(l => "  " + l).join("\n")}`;
+                return `${label}: ${v}`;
+              }).join("\n");
+            }
+            return String(info);
+          };
           const renderRecCard = (rec, summary, extraInfo) => {
             const reasons = (rec.reasons || []).map(r => `<li>${escapeHtml(r)}</li>`).join("");
             const tradeoffs = (rec.tradeoffs || []).map(t => `<li>${escapeHtml(t)}</li>`).join("");
+            const infoText = toInfoText(extraInfo);
             return `
               <div class="ms-decision-card">
                 <div class="ms-decision-rec">
@@ -367,9 +420,9 @@
                     <div class="ms-decision-label ms-decision-label-amber">Trade-offs</div>
                     <ul>${tradeoffs}</ul>
                   </div>` : ""}
-                  ${extraInfo ? `<div class="ms-decision-section">
+                  ${infoText ? `<div class="ms-decision-section">
                     <div class="ms-decision-label ms-decision-label-green">Details</div>
-                    <div class="ms-decision-info">${escapeHtml(extraInfo)}</div>
+                    <div class="ms-decision-info">${escapeHtml(infoText)}</div>
                   </div>` : ""}
                   ${summary ? `<div class="ms-decision-summary">${escapeHtml(summary)}</div>` : ""}
                 </div>
@@ -381,7 +434,8 @@
           } else if (s.type === "recommendation" && s.recommendation) {
             answerEl.innerHTML = renderRecCard(s.recommendation, s.summary);
           } else {
-            answerEl.innerHTML = `<div class="ms-ai-result"><div class="ms-ai-label">AI Answer</div><div class="ms-ai-text">${escapeHtml(s.answer || s.summary || "")}</div></div>`;
+            const ans = toInfoText(s.answer || s.summary || "");
+            answerEl.innerHTML = `<div class="ms-ai-result"><div class="ms-ai-label">AI Answer</div><div class="ms-ai-text">${escapeHtml(ans)}</div></div>`;
           }
         } else {
           answerEl.innerHTML = `<div class="ms-ai-result"><div class="ms-ai-label">AI Answer</div><div class="ms-ai-text">${escapeHtml(data.answer)}</div></div>`;
@@ -411,6 +465,88 @@
     wireFilters("sort-by", v => _sortBy = v);
     document.getElementById("ai-search-input").addEventListener("keydown", e => { if (e.key === "Enter") doAiSearch(); });
     loadSuppliers();
+  </script>
+
+  <!-- Supplier Deep Report modal -->
+  <div class="modal-overlay ms-report-overlay" id="report-modal" hidden>
+    <div class="modal ms-report-modal" role="dialog" aria-modal="true">
+      <button type="button" class="modal-close" id="report-close" aria-label="Close">×</button>
+      <div class="modal-header">
+        <span class="modal-icon">📊</span>
+        <h2 class="modal-title" id="report-title">Deep Report</h2>
+        <p class="modal-sub" id="report-sub">AI-generated due diligence summary</p>
+      </div>
+      <div class="modal-body" id="report-body"></div>
+    </div>
+  </div>
+
+  <script>
+    let _currentReportId = null;
+
+    async function openReport(id, refresh = false) {
+      _currentReportId = id;
+      const modal = document.getElementById("report-modal");
+      const body = document.getElementById("report-body");
+      const titleEl = document.getElementById("report-title");
+      const sub = document.getElementById("report-sub");
+      const s = _suppliers.find(x => x.id === id);
+      titleEl.textContent = s?.supplier_name || "Deep Report";
+      sub.textContent = refresh ? "Regenerating report..." : "Loading report...";
+      body.innerHTML = '<div class="ms-ai-loading">' + (refresh ? "Running fresh web searches (~10-20s)..." : "Loading...") + '</div>';
+      modal.hidden = false;
+      document.body.classList.add("modal-open");
+
+      try {
+        const url = `/api/supplier-report/${id}${refresh ? "?refresh=true" : ""}`;
+        const resp = await fetch(url, { method: "POST" });
+        const data = await resp.json();
+        if (data.error) {
+          body.innerHTML = `<div class="ms-ai-error">${escapeHtml(data.error)}</div>`;
+          sub.textContent = "Report generation failed";
+          return;
+        }
+        const sections = data.sections || {};
+        const sectionOrder = [
+          ["overview", "Company Overview"],
+          ["capacity", "Capacity & Scale"],
+          ["certifications", "Certifications"],
+          ["reputation", "Reputation & Reviews"],
+          ["recent_news", "Recent News"],
+          ["risk_signals", "Risk Signals"],
+        ];
+        const html = sectionOrder.map(([key, label]) => {
+          const text = sections[key];
+          if (!text) return "";
+          return `<div class="ms-report-section">
+            <div class="ms-report-label">${label}</div>
+            <div class="ms-report-text">${escapeHtml(text)}</div>
+          </div>`;
+        }).filter(Boolean).join("");
+        const conf = typeof data.confidence === "number" ? `<div class="ms-report-conf">AI Confidence: ${(data.confidence * 100).toFixed(0)}%</div>` : "";
+        const cacheBanner = data.cached
+          ? `<div class="ms-report-cached">Cached from ${data.generated_at ? new Date(data.generated_at).toLocaleString() : "earlier"}. <button class="ms-report-refresh" onclick="openReport(${id}, true)">Regenerate</button></div>`
+          : (data.generated_at ? `<div class="ms-report-fresh">Just generated. <button class="ms-report-refresh" onclick="openReport(${id}, true)">Regenerate</button></div>` : "");
+        body.innerHTML = `
+          ${cacheBanner}
+          ${data.summary ? `<div class="ms-report-summary"><div class="ms-report-label">Summary</div><div class="ms-report-text">${escapeHtml(data.summary)}</div></div>` : ""}
+          ${html || '<div class="ms-ai-loading">No sections returned.</div>'}
+          ${conf}
+        `;
+        sub.textContent = data.cached ? "Cached report — click Regenerate for fresh data" : "Sources: Google search + supplier website";
+      } catch (e) {
+        body.innerHTML = `<div class="ms-ai-error">Could not generate report.</div>`;
+        sub.textContent = "Error";
+      }
+    }
+
+    function closeReport() {
+      document.getElementById("report-modal").hidden = true;
+      document.body.classList.remove("modal-open");
+    }
+    document.getElementById("report-close").addEventListener("click", closeReport);
+    document.getElementById("report-modal").addEventListener("click", e => {
+      if (e.target.id === "report-modal") closeReport();
+    });
   </script>
 
   <!-- Confirm modal -->

@@ -2109,6 +2109,46 @@ body.modal-open { overflow: hidden; }
 }
 .ms-suggestion:hover { border-color: rgba(13,172,241,0.50); background: rgba(13,172,241,0.15); }
 
+.ms-chat {
+  margin-top: 1rem;
+  display: flex;
+  flex-direction: column;
+  gap: 0.6rem;
+}
+.ms-chat-user {
+  padding: 0.75rem 1rem;
+  background: var(--accent-dim);
+  border: 1px solid rgba(13,172,241,0.20);
+  border-radius: 8px;
+  font-size: 0.85rem;
+}
+.ms-chat-role {
+  display: block;
+  font-size: 0.65rem;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: var(--accent);
+  margin-bottom: 0.25rem;
+}
+.ms-chat-msg {
+  color: var(--text);
+  line-height: 1.55;
+}
+.ms-clear-chat {
+  align-self: flex-end;
+  margin-top: 0.5rem;
+  padding: 0.3rem 0.75rem;
+  font-size: 0.75rem;
+  color: var(--muted);
+  background: transparent;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  cursor: pointer;
+  font-family: var(--font);
+}
+.ms-clear-chat:hover { color: var(--red); border-color: var(--red); }
+
 .ms-scope-hint {
   margin-top: 0.6rem;
   padding: 0.5rem 0.9rem;
@@ -2261,12 +2301,37 @@ body.modal-open { overflow: hidden; }
 .ms-cmp-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); gap: 0; }
 .ms-cmp-col { padding: 1.25rem; border-right: 1px solid var(--border); }
 .ms-cmp-col:last-child { border-right: none; }
-.ms-cmp-name { font-size: 0.9rem; font-weight: 700; color: var(--text); margin-bottom: 0.15rem; }
+.ms-cmp-col { display: flex; flex-direction: column; }
+.ms-cmp-name {
+  font-size: 0.9rem;
+  font-weight: 700;
+  color: var(--text);
+  margin-bottom: 0.15rem;
+  line-height: 1.3;
+  min-height: 2.6em;
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+}
 .ms-cmp-country { font-size: 0.75rem; color: var(--muted); margin-bottom: 0.75rem; }
+.ms-cmp-url { margin-top: auto; }
 .ms-cmp-row { display: flex; justify-content: space-between; padding: 0.35rem 0; font-size: 0.8rem; border-bottom: 1px dashed rgba(0,0,0,0.06); }
 .ms-cmp-row:last-child { border-bottom: none; }
 .ms-cmp-row span { color: var(--muted); }
 .ms-cmp-row strong { font-weight: 700; }
+.ms-cmp-url {
+  margin-top: 0.75rem;
+  padding-top: 0.6rem;
+  border-top: 1px dashed var(--border);
+  font-size: 0.75rem;
+  word-break: break-all;
+}
+.ms-cmp-url a { color: var(--accent); }
+.ms-cmp-report-btn {
+  margin-top: 0.75rem;
+  align-self: flex-start;
+}
 
 /* Empty state */
 .ms-empty {
@@ -2380,6 +2445,98 @@ body.modal-open { overflow: hidden; }
 .ms-card-url { font-size: 0.8rem; color: var(--accent); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 400px; }
 .ms-card-actions { display: flex; align-items: center; gap: 0.75rem; }
 .ms-card-date { font-size: 0.75rem; color: var(--muted); }
+.ms-report-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.25rem;
+  padding: 0.25rem 0.65rem;
+  font-size: 0.75rem;
+  font-weight: 600;
+  color: var(--accent);
+  background: var(--accent-dim);
+  border: 1px solid rgba(13,172,241,0.25);
+  border-radius: 6px;
+  cursor: pointer;
+  transition: all 0.2s;
+  font-family: var(--font);
+}
+.ms-report-btn:hover {
+  background: rgba(13,172,241,0.18);
+  border-color: rgba(13,172,241,0.50);
+}
+
+.ms-report-modal { max-width: 720px; }
+.ms-report-summary {
+  padding: 0.85rem 1rem;
+  background: var(--accent-dim);
+  border: 1px solid rgba(13,172,241,0.25);
+  border-radius: 8px;
+  margin-bottom: 1rem;
+}
+.ms-report-section {
+  margin-bottom: 1rem;
+  padding-bottom: 0.75rem;
+  border-bottom: 1px dashed var(--border);
+}
+.ms-report-section:last-of-type { border-bottom: none; }
+.ms-report-label {
+  font-size: 0.7rem;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  color: var(--accent);
+  margin-bottom: 0.35rem;
+}
+.ms-report-text {
+  font-size: 0.85rem;
+  line-height: 1.6;
+  color: var(--text);
+  white-space: pre-wrap;
+}
+.ms-report-conf {
+  margin-top: 1rem;
+  font-size: 0.75rem;
+  color: var(--muted);
+  text-align: right;
+}
+
+.ms-report-cached, .ms-report-fresh {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 0.75rem;
+  padding: 0.5rem 0.85rem;
+  font-size: 0.75rem;
+  border-radius: 6px;
+  margin-bottom: 1rem;
+}
+.ms-report-cached {
+  background: rgba(245,158,11,0.08);
+  border: 1px solid rgba(245,158,11,0.25);
+  color: #b45309;
+}
+.ms-report-fresh {
+  background: rgba(113,246,210,0.10);
+  border: 1px solid rgba(90,232,194,0.30);
+  color: #0a7a5a;
+}
+.ms-report-refresh {
+  padding: 0.25rem 0.75rem;
+  font-size: 0.7rem;
+  font-weight: 600;
+  color: var(--accent);
+  background: transparent;
+  border: 1px solid var(--accent);
+  border-radius: 6px;
+  cursor: pointer;
+  font-family: var(--font);
+  white-space: nowrap;
+}
+.ms-report-refresh:hover {
+  background: var(--accent);
+  color: #fff;
+}
+
 .ms-delete-btn {
   display: inline-flex;
   align-items: center;

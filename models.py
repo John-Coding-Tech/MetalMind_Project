@@ -25,4 +25,6 @@ class SavedSupplier(Base):
     anomalies = Column(JSON, nullable=True)
     ai_adjustment = Column(JSON, nullable=True)
     notes = Column(Text, nullable=True)
+    deep_report = Column(JSON, nullable=True)
+    report_generated_at = Column(DateTime, nullable=True)
     saved_at = Column(DateTime, default=lambda: datetime.now(timezone.utc))
