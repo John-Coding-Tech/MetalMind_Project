@@ -128,6 +128,13 @@ function _hideAllStates() {
 function showIdle() {
   _hideAllStates();
   document.getElementById("idle-state").style.display = "flex";
+  // Show "Previous Analysis Result" button only if we have cached data
+  const prevBtn = document.getElementById("previous-analysis-btn");
+  if (prevBtn) {
+    try {
+      prevBtn.style.display = sessionStorage.getItem("metalmind_last_analysis") ? "" : "none";
+    } catch (_) { prevBtn.style.display = "none"; }
+  }
 }
 
 function showLoading() {
@@ -144,6 +151,8 @@ function showError(msg) {
 function showResults() {
   _hideAllStates();
   document.getElementById("results-state").style.display = "block";
+  const prevBtn = document.getElementById("previous-analysis-btn");
+  if (prevBtn) prevBtn.style.display = "none";
 }
 
 

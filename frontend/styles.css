@@ -441,9 +441,10 @@ body.analysis-mode .back-link { display: inline-flex; align-items: center; }
 }
 .priority-pill:hover { color: var(--text); }
 .priority-pill.is-active {
-  background: var(--btn-primary);
-  color: #fff;
-  box-shadow: 0 2px 8px rgba(4,87,203,0.25);
+  background: #fff;
+  color: var(--btn-primary);
+  border: 1px solid rgba(4,87,203,0.30);
+  box-shadow: 0 2px 8px rgba(4,87,203,0.10);
 }
 
 .mode-grid {
@@ -1661,15 +1662,17 @@ body.modal-open { overflow: hidden; }
   padding: 0.85rem 2.5rem;
   font-size: 0.95rem;
   font-weight: 600;
-  color: #fff;
-  background: var(--btn-primary);
-  border: none;
+  color: var(--btn-primary);
+  background: #fff;
+  border: 1px solid rgba(4,87,203,0.30);
   border-radius: 8px;
   cursor: pointer;
   transition: all 0.3s;
 }
 .run-btn:hover {
-  background: #0171e3;
+  background: var(--btn-primary);
+  color: #fff;
+  border-color: var(--btn-primary);
   transform: translateY(-2px);
   box-shadow: 0 8px 30px rgba(4,87,203,0.35), 0 0 0 1px rgba(113,246,210,0.30);
 }
@@ -2039,6 +2042,14 @@ body.modal-open { overflow: hidden; }
   position: fixed;
   top: 95px;
   right: 4rem;
+  z-index: 50;
+  font-size: 0.9rem;
+  padding: 0.6rem 1.4rem;
+}
+.floating-previous-analysis {
+  position: fixed;
+  top: 95px;
+  right: 15rem;
   z-index: 50;
   font-size: 0.9rem;
   padding: 0.6rem 1.4rem;
