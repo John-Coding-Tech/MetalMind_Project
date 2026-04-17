@@ -40,8 +40,13 @@ from engine.anomaly          import dataset_median, detect_anomalies
 from engine.ai_adjustment    import from_crosscheck as adj_from_crosscheck, apply as adj_apply
 from modules.currency       import get_rates
 from config                 import DECISION_SCORE_THRESHOLD
+from db import init_db
+from routes.suppliers import router as suppliers_router
 
 app = FastAPI(title="MetalMind API")
+
+app.include_router(suppliers_router)
+init_db()
 
 FRONTEND = Path(__file__).parent / "frontend"
 
@@ -386,6 +391,12 @@ def health(check_serper: bool = False, check_tavily: bool = False, check_gemma: 
 
 app.mount("/static", StaticFiles(directory=FRONTEND), name="static")
 
+@app.get("/my-suppliers")
+def serve_my_suppliers_page():
+    return FileResponse(FRONTEND / "my-suppliers.html")
+
 @app.get("/{full_path:path}")
 def serve_frontend(full_path: str):
+    if f"/{full_path}".startswith("/api/"):
+        raise HTTPException(status_code=404, detail="Not found")
     return FileResponse(FRONTEND / "index.html")

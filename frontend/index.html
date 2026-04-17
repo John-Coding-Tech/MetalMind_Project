@@ -55,6 +55,7 @@
                 <span class="run-btn-text">Run AI Cross-Checks Analysis</span>
                 <span class="run-btn-arrow">→</span>
               </button>
+              <a href="/my-suppliers" class="nav-my-suppliers">My Suppliers</a>
             </div>
           </section>
 
@@ -79,6 +80,10 @@
 
         <!-- RESULTS -->
         <div id="results-state" style="display:none;">
+
+          <div class="results-toolbar">
+            <a href="/my-suppliers" class="nav-my-suppliers">My Suppliers</a>
+          </div>
 
           <!-- Winner card -->
           <section class="card winner-card" id="winner-card">
@@ -118,12 +123,14 @@
               <span class="trust-banner-sub" id="trust-sub"></span>
             </div>
 
+            <div class="winner-url" id="winner-url"></div>
             <p class="winner-explanation" id="winner-explanation"></p>
             <div id="winner-anomalies"></div>
             <details class="risk-details">
               <summary>Risk Details</summary>
               <pre id="winner-risk-note"></pre>
             </details>
+            <button type="button" class="save-btn" id="winner-save-btn">Save to My Suppliers</button>
           </section>
 
           <!-- Top 3 -->
@@ -134,25 +141,22 @@
 
           <!-- All Suppliers -->
           <section class="results-section">
-            <details class="all-suppliers">
-              <summary class="all-suppliers-summary">
-                <span class="all-suppliers-label">All Suppliers Found</span>
-                <span class="all-suppliers-count" id="all-suppliers-count"></span>
-                <span class="all-suppliers-chevron">▾</span>
-              </summary>
-              <div class="table-wrapper">
-                <table class="supplier-table">
-                  <thead>
-                    <tr>
-                      <th>#</th><th>Supplier</th><th>Country</th>
-                      <th>Est. Price</th><th>Risk</th><th>Value Score</th>
-                      <th>URL</th><th>Details</th>
-                    </tr>
-                  </thead>
-                  <tbody id="all-tbody"></tbody>
-                </table>
-              </div>
-            </details>
+            <div class="all-suppliers-header">
+              <span class="all-suppliers-label">All Suppliers Found</span>
+              <span class="all-suppliers-count" id="all-suppliers-count"></span>
+            </div>
+            <div class="table-wrapper">
+              <table class="supplier-table">
+                <thead>
+                  <tr>
+                    <th>#</th><th>Supplier</th><th>Country</th>
+                    <th>Est. Price</th><th>Risk</th><th>Value Score</th>
+                    <th>URL</th><th>Details</th>
+                  </tr>
+                </thead>
+                <tbody id="all-tbody"></tbody>
+              </table>
+            </div>
           </section>
 
         </div><!-- /results -->

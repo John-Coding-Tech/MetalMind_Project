@@ -6,6 +6,53 @@
  */
 
 // ---------------------------------------------------------------------------
+// Save supplier to database
+// ---------------------------------------------------------------------------
+
+async function saveSupplier(supplier, btnEl) {
+  btnEl.disabled = true;
+  btnEl.textContent = "Saving...";
+  try {
+    const resp = await fetch("/api/save-supplier", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        supplier_name: supplier.name,
+        country: supplier.country,
+        price_display: supplier.price_usd ? formatPrice(supplier.price_usd, _lastSymbol, _lastFx) : null,
+        price_usd: supplier.price_usd,
+        risk_level: supplier.risk_level,
+        risk_score: supplier.risk_score,
+        risk_reasons: supplier.risk_reasons,
+        value_score: supplier.value_score,
+        url: supplier.url,
+        description: supplier.description,
+        trust: supplier.trust,
+        anomalies: supplier.anomalies,
+        ai_adjustment: supplier.ai_adjustment,
+      }),
+    });
+    if (resp.status === 409) {
+      btnEl.textContent = "Saved";
+      btnEl.classList.add("saved");
+      return;
+    }
+    if (!resp.ok) {
+      btnEl.textContent = "Save";
+      btnEl.disabled = false;
+      return;
+    }
+    btnEl.textContent = "Saved";
+    btnEl.classList.add("saved");
+  } catch (_) {
+    btnEl.textContent = "Save";
+    btnEl.disabled = false;
+  }
+}
+
+let _lastSymbol = "A$", _lastFx = 1.58;
+
+// ---------------------------------------------------------------------------
 // State helpers
 // ---------------------------------------------------------------------------
 
@@ -214,6 +261,7 @@ async function fetchInsight(name, containerEl) {
 
 function renderResults(data) {
   const { winner, top3, all_suppliers, explanation, risk_note, symbol, fx, decision, trust } = data;
+  _lastSymbol = symbol; _lastFx = fx;
 
   document.getElementById("all-suppliers-count").textContent = `${all_suppliers.length}`;
 
@@ -240,6 +288,10 @@ function renderResults(data) {
 
   // Winner card
   document.getElementById("winner-name").textContent       = winner.name;
+  const winnerUrlEl = document.getElementById("winner-url");
+  if (winnerUrlEl) {
+    winnerUrlEl.innerHTML = winner.url ? `<a href="${winner.url}" target="_blank" rel="noopener">${winner.url}</a>` : "";
+  }
   document.getElementById("winner-explanation").textContent = explanation;
   document.getElementById("winner-risk-note").textContent   = risk_note;
   document.getElementById("winner-price").textContent = winner.price_usd ? formatPrice(winner.price_usd, symbol, fx) : "—";
@@ -254,6 +306,14 @@ function renderResults(data) {
 
   const winnerAnomaliesEl = document.getElementById("winner-anomalies");
   if (winnerAnomaliesEl) winnerAnomaliesEl.innerHTML = anomaliesHTML(winner.anomalies);
+
+  const winnerSaveBtn = document.getElementById("winner-save-btn");
+  if (winnerSaveBtn) {
+    winnerSaveBtn.textContent = "Save to My Suppliers";
+    winnerSaveBtn.disabled = false;
+    winnerSaveBtn.classList.remove("saved");
+    winnerSaveBtn.onclick = () => saveSupplier(winner, winnerSaveBtn);
+  }
 
   // Top 3 cards
   const top3Container = document.getElementById("top3-cards");
@@ -282,7 +342,10 @@ function renderResults(data) {
         <summary>AI Insight</summary>
         <div class="ai-insight-container"></div>
       </details>
+      <button type="button" class="save-btn save-btn-card">Save to My Suppliers</button>
     `;
+    const saveBtn = card.querySelector(".save-btn");
+    saveBtn.addEventListener("click", () => saveSupplier(s, saveBtn));
     // Wire on-demand insight loading
     const insightDetails = card.querySelector(".ai-insight");
     let insightLoaded = false;
@@ -312,6 +375,7 @@ function renderResults(data) {
       <td class="row-actions-cell">
         <span class="row-details-btn" data-action="details"><span class="row-details-btn-text">View</span><span class="row-details-btn-chevron">▸</span></span>
         <button class="row-insight-btn" data-action="insight" onclick="event.stopPropagation()">🔍 AI Insight</button>
+        <button class="save-btn save-btn-row" data-action="save" onclick="event.stopPropagation()">Save</button>
       </td>
     `;
     tbody.appendChild(tr);
@@ -334,6 +398,10 @@ function renderResults(data) {
       detailsRow.classList.toggle("is-visible", expanded);
       if (btnText) btnText.textContent = expanded ? "Hide" : "View";
     });
+
+    // "Save" button
+    const saveRowBtn = tr.querySelector('[data-action="save"]');
+    saveRowBtn.addEventListener("click", () => saveSupplier(s, saveRowBtn));
 
     // "🔍 AI Insight" — expand row + load insight on demand
     let insightLoaded = false;
@@ -387,7 +455,7 @@ async function runAnalysis() {
     const resp = await fetch("/api/analyze", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ max_results: 5, priority }),
+      body: JSON.stringify({ max_results: 10, priority }),
     });
     if (!resp.ok) {
       const err = await resp.json().catch(() => ({}));

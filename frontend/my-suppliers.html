@@ -1,0 +1,392 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>My Suppliers — MetalMind</title>
+  <link rel="stylesheet" href="/static/styles.css" />
+</head>
+<body>
+
+  <nav class="nav">
+    <a href="https://phykawing.github.io/MetalMind-FrontEnd/" class="nav-logo">
+      <img src="/static/Images/Logo.png" alt="MetalMind AI" class="nav-logo-img" />
+      <span class="nav-logo-name">Metal<span>Mind</span> AI</span>
+    </a>
+    <div class="nav-links">
+      <a href="https://phykawing.github.io/MetalMind-FrontEnd/#problem">Problem</a>
+      <a href="https://phykawing.github.io/MetalMind-FrontEnd/#solution">Solution</a>
+      <a href="https://phykawing.github.io/MetalMind-FrontEnd/#demo">Demo</a>
+      <a href="https://phykawing.github.io/MetalMind-FrontEnd/#ebitda">Financial Impact</a>
+      <a href="https://phykawing.github.io/MetalMind-FrontEnd/#team">Team</a>
+      <a href="https://phykawing.github.io/MetalMind-FrontEnd/#contact">Contact</a>
+    </div>
+  </nav>
+
+  <div class="app-layout">
+    <main class="main-content">
+      <div class="main-inner ms-page">
+
+        <div class="ms-header">
+          <h1 class="ms-title">My Suppliers</h1>
+          <p class="ms-sub">Your saved suppliers. Use AI to search and compare them.</p>
+        </div>
+
+        <!-- AI Search -->
+        <div class="ms-search">
+          <div class="ms-search-row">
+            <input type="text" id="ai-search-input" class="ms-search-input"
+              placeholder="Ask AI anything about your suppliers..." />
+            <button type="button" class="run-btn ms-search-btn" id="ai-search-btn" onclick="doAiSearch()">
+              <span class="run-btn-text">Ask AI</span>
+              <span class="run-btn-arrow">&rarr;</span>
+            </button>
+          </div>
+          <div class="ms-suggestions" id="ai-suggestions">
+            <button class="ms-suggestion" onclick="useSuggestion(this)">Which supplier has the lowest risk?</button>
+            <button class="ms-suggestion" onclick="useSuggestion(this)">Best value under $10?</button>
+            <button class="ms-suggestion" onclick="useSuggestion(this)">Compare India vs China</button>
+            <button class="ms-suggestion" onclick="useSuggestion(this)">Recommend the safest option</button>
+          </div>
+          <div id="ai-answer" style="display:none;"></div>
+        </div>
+
+        <!-- Loading -->
+        <div id="ms-loading" class="state-panel" style="display:none;">
+          <div class="spinner"></div>
+          <p class="loading-msg">Loading suppliers...</p>
+        </div>
+
+        <!-- Empty state -->
+        <div id="ms-empty" class="ms-empty" style="display:none;">
+          <div class="ms-empty-icon">📋</div>
+          <p>No suppliers saved yet.</p>
+          <p class="ms-empty-hint">Run an analysis and click "Save" on any supplier to add it here.</p>
+          <a href="/" class="run-btn" style="margin-top:0.5rem;"><span class="run-btn-text">Go to Analysis</span><span class="run-btn-arrow">&rarr;</span></a>
+        </div>
+
+        <!-- Filters + Sort -->
+        <div id="ms-controls" class="ms-controls" style="display:none;">
+          <div class="ms-filters">
+            <div class="ms-filter-group">
+              <span class="ms-filter-label">Country</span>
+              <div class="ms-pills" id="filter-country">
+                <button class="ms-pill is-active" data-value="all">All</button>
+                <button class="ms-pill" data-value="India">India</button>
+                <button class="ms-pill" data-value="China">China</button>
+              </div>
+            </div>
+            <div class="ms-filter-group">
+              <span class="ms-filter-label">Risk</span>
+              <div class="ms-pills" id="filter-risk">
+                <button class="ms-pill is-active" data-value="all">All</button>
+                <button class="ms-pill" data-value="Low">Low</button>
+                <button class="ms-pill" data-value="Medium">Medium</button>
+                <button class="ms-pill" data-value="High">High</button>
+              </div>
+            </div>
+            <div class="ms-filter-group">
+              <span class="ms-filter-label">Sort by</span>
+              <div class="ms-pills" id="sort-by">
+                <button class="ms-pill is-active" data-value="value">Value Score</button>
+                <button class="ms-pill" data-value="price">Price</button>
+                <button class="ms-pill" data-value="risk">Risk</button>
+              </div>
+            </div>
+          </div>
+          <div class="ms-count" id="ms-count"></div>
+        </div>
+
+        <!-- Compare bar -->
+        <div id="compare-bar" class="ms-compare-bar" style="display:none;">
+          <span id="compare-count">0 selected</span>
+          <button class="run-btn ms-compare-btn" onclick="showCompare()">
+            <span class="run-btn-text">Compare</span>
+          </button>
+          <button class="ms-compare-clear" onclick="clearCompare()">Clear</button>
+        </div>
+
+        <!-- Compare panel -->
+        <div id="compare-panel" style="display:none;"></div>
+
+        <!-- Supplier list -->
+        <div id="ms-list" class="ms-list" style="display:none;"></div>
+
+      </div>
+    </main>
+  </div>
+
+  <script>
+    function escapeHtml(s) {
+      return String(s).replace(/&/g,"&amp;").replace(/</g,"&lt;").replace(/>/g,"&gt;").replace(/"/g,"&quot;");
+    }
+
+    let _suppliers = [];
+    let _filterCountry = "all";
+    let _filterRisk = "all";
+    let _sortBy = "value";
+    let _compareSet = new Set();
+    let _highlights = [];
+
+    // ── Load ──
+    async function loadSuppliers() {
+      document.getElementById("ms-loading").style.display = "flex";
+      try { _suppliers = await (await fetch("/api/saved-suppliers")).json(); }
+      catch (_) { _suppliers = []; }
+      document.getElementById("ms-loading").style.display = "none";
+      renderAll();
+    }
+
+    // ── Filter + Sort ──
+    function getFiltered() {
+      let list = [..._suppliers];
+      if (_filterCountry !== "all") list = list.filter(s => s.country === _filterCountry);
+      if (_filterRisk !== "all") list = list.filter(s => s.risk_level === _filterRisk);
+      list.sort((a, b) => {
+        if (_sortBy === "value") return (b.value_score || 0) - (a.value_score || 0);
+        if (_sortBy === "price") return (a.price_usd || 999) - (b.price_usd || 999);
+        if (_sortBy === "risk") return (a.risk_score || 1) - (b.risk_score || 1);
+        return 0;
+      });
+      return list;
+    }
+
+    function getBestId() {
+      if (_suppliers.length === 0) return null;
+      const sorted = [..._suppliers].sort((a, b) => (b.value_score || 0) - (a.value_score || 0));
+      return sorted[0]?.id;
+    }
+
+    // ── Render ──
+    function renderAll() {
+      const controls = document.getElementById("ms-controls");
+      const list = document.getElementById("ms-list");
+      const empty = document.getElementById("ms-empty");
+
+      if (_suppliers.length === 0) {
+        list.style.display = "none";
+        controls.style.display = "none";
+        empty.style.display = "flex";
+        return;
+      }
+      controls.style.display = "";
+      empty.style.display = "none";
+      list.style.display = "";
+      renderList();
+    }
+
+    function renderList() {
+      const filtered = getFiltered();
+      const bestId = getBestId();
+      const list = document.getElementById("ms-list");
+      const countEl = document.getElementById("ms-count");
+      countEl.textContent = `${filtered.length} of ${_suppliers.length} suppliers`;
+
+      if (filtered.length === 0) {
+        list.innerHTML = '<div class="ms-empty-tab">No suppliers match these filters.</div>';
+        return;
+      }
+
+      list.innerHTML = filtered.map(s => {
+        const isBest = s.id === bestId;
+        const isHighlight = _highlights.includes(s.supplier_name);
+        const isCompare = _compareSet.has(s.id);
+        const riskIcon = s.risk_level === "Low" ? "✓" : s.risk_level === "Medium" ? "●" : "▲";
+        const riskCls = s.risk_level === "Low" ? "ms-risk-low" : s.risk_level === "Medium" ? "ms-risk-med" : "ms-risk-high";
+        const trustHtml = s.trust ? `<span class="trust-badge trust-${s.trust}">${s.trust.toUpperCase()}</span>` : "";
+        const countryCls = s.country?.toLowerCase() === "india" ? "tag-india" : "tag-china";
+        const bestBadge = isBest ? '<span class="ms-best-badge">Best Value</span>' : "";
+        const highlightCls = isHighlight ? " ms-card-highlight" : "";
+        const bestCls = isBest ? " ms-card-best" : "";
+
+        return `
+        <div class="ms-card${bestCls}${highlightCls}" data-id="${s.id}">
+          <div class="ms-card-top">
+            <label class="ms-compare-check" title="Select to compare">
+              <input type="checkbox" ${isCompare ? "checked" : ""} onchange="toggleCompare(${s.id})" />
+            </label>
+            <div class="ms-card-info">
+              <div class="ms-card-name-row">
+                <span class="ms-card-name">${escapeHtml(s.supplier_name)}</span>
+                ${bestBadge}
+              </div>
+              <div class="ms-card-meta">
+                <span class="country-tag ${countryCls}">${escapeHtml(s.country || "")}</span>
+                <span class="ms-risk-pill ${riskCls}"><span class="ms-risk-icon">${riskIcon}</span> ${escapeHtml(s.risk_level || "")} Risk</span>
+                ${trustHtml}
+              </div>
+            </div>
+            <div class="ms-card-stats">
+              <div class="ms-stat"><div class="ms-stat-label">Price</div><div class="ms-stat-value">${escapeHtml(s.price_display || "—")}</div></div>
+              <div class="ms-stat"><div class="ms-stat-label">Value</div><div class="ms-stat-value ms-stat-accent">${s.value_score != null ? s.value_score + "/100" : "—"}</div></div>
+              <div class="ms-stat"><div class="ms-stat-label">Risk Score</div><div class="ms-stat-value">${s.risk_score != null ? (s.risk_score * 100).toFixed(0) + "%" : "—"}</div></div>
+            </div>
+          </div>
+          <div class="ms-card-notes-row">
+            <input type="text" class="ms-notes-input" placeholder="Add a note..."
+              value="${escapeHtml(s.notes || "")}"
+              onblur="saveNote(${s.id}, this.value)"
+              onkeydown="if(event.key==='Enter'){this.blur();}" />
+          </div>
+          <div class="ms-card-bottom">
+            ${s.url ? `<a href="${escapeHtml(s.url)}" target="_blank" rel="noopener" class="ms-card-url">${escapeHtml(s.url)}</a>` : "<span></span>"}
+            <div class="ms-card-actions">
+              <span class="ms-card-date">Saved ${new Date(s.saved_at).toLocaleDateString()}</span>
+              <button class="ms-delete-btn" onclick="deleteSupplier(${s.id})"><span class="ms-delete-icon">🗑</span> Remove</button>
+            </div>
+          </div>
+        </div>`;
+      }).join("");
+    }
+
+    // ── Notes ──
+    async function saveNote(id, text) {
+      const s = _suppliers.find(s => s.id === id);
+      if (!s || s.notes === text) return;
+      try {
+        const resp = await fetch(`/api/saved-supplier/${id}/notes`, {
+          method: "PATCH",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ notes: text }),
+        });
+        if (resp.ok) { const updated = await resp.json(); s.notes = updated.notes; }
+      } catch (_) {}
+    }
+
+    // ── Delete ──
+    async function deleteSupplier(id) {
+      if (!confirm("Remove this supplier from your list?")) return;
+      const resp = await fetch(`/api/saved-supplier/${id}`, { method: "DELETE" });
+      if (resp.ok) {
+        _suppliers = _suppliers.filter(s => s.id !== id);
+        _compareSet.delete(id);
+        updateCompareBar();
+        renderAll();
+      }
+    }
+
+    // ── Compare ──
+    function toggleCompare(id) {
+      if (_compareSet.has(id)) _compareSet.delete(id); else _compareSet.add(id);
+      updateCompareBar();
+      renderList();
+    }
+    function clearCompare() {
+      _compareSet.clear();
+      updateCompareBar();
+      document.getElementById("compare-panel").style.display = "none";
+      renderList();
+    }
+    function updateCompareBar() {
+      const bar = document.getElementById("compare-bar");
+      const n = _compareSet.size;
+      bar.style.display = n > 0 ? "flex" : "none";
+      document.getElementById("compare-count").textContent = `${n} selected`;
+    }
+    function showCompare() {
+      const items = _suppliers.filter(s => _compareSet.has(s.id));
+      if (items.length < 2) { alert("Select at least 2 suppliers to compare."); return; }
+      const panel = document.getElementById("compare-panel");
+      panel.style.display = "";
+      const cols = items.map(s => {
+        const riskCls = s.risk_level === "Low" ? "ms-risk-low" : s.risk_level === "Medium" ? "ms-risk-med" : "ms-risk-high";
+        return `<div class="ms-cmp-col">
+          <div class="ms-cmp-name">${escapeHtml(s.supplier_name)}</div>
+          <div class="ms-cmp-country">${escapeHtml(s.country || "")}</div>
+          <div class="ms-cmp-row"><span>Price</span><strong>${escapeHtml(s.price_display || "—")}</strong></div>
+          <div class="ms-cmp-row"><span>Value Score</span><strong>${s.value_score != null ? s.value_score + "/100" : "—"}</strong></div>
+          <div class="ms-cmp-row"><span>Risk</span><strong class="${riskCls}">${escapeHtml(s.risk_level || "—")}</strong></div>
+          <div class="ms-cmp-row"><span>Risk Score</span><strong>${s.risk_score != null ? (s.risk_score * 100).toFixed(0) + "%" : "—"}</strong></div>
+          <div class="ms-cmp-row"><span>Trust</span><strong>${escapeHtml((s.trust || "N/A").toUpperCase())}</strong></div>
+        </div>`;
+      }).join("");
+      panel.innerHTML = `<div class="ms-cmp-card">
+        <div class="ms-cmp-header"><span>Side-by-Side Comparison</span><button class="ms-cmp-close" onclick="this.closest('.ms-cmp-card').parentElement.style.display='none'">✕</button></div>
+        <div class="ms-cmp-grid">${cols}</div>
+      </div>`;
+      panel.scrollIntoView({ behavior: "smooth", block: "nearest" });
+    }
+
+    // ── AI Search ──
+    function useSuggestion(btn) {
+      document.getElementById("ai-search-input").value = btn.textContent;
+      doAiSearch();
+    }
+
+    async function doAiSearch() {
+      const input = document.getElementById("ai-search-input");
+      const query = input.value.trim();
+      if (!query) return;
+
+      const answerEl = document.getElementById("ai-answer");
+      const btn = document.getElementById("ai-search-btn");
+      btn.classList.add("btn-running");
+      answerEl.style.display = "";
+      answerEl.innerHTML = '<div class="ms-ai-loading">Thinking...</div>';
+      _highlights = [];
+
+      try {
+        const resp = await fetch("/api/ai-search", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ query }),
+        });
+        const data = await resp.json();
+
+        if (data.structured) {
+          const s = data.structured;
+          const rec = s.recommendation || {};
+          const reasons = (rec.reasons || []).map(r => `<li>${escapeHtml(r)}</li>`).join("");
+          const tradeoffs = (rec.tradeoffs || []).map(t => `<li>${escapeHtml(t)}</li>`).join("");
+          _highlights = s.highlights || [];
+
+          answerEl.innerHTML = `
+            <div class="ms-decision-card">
+              <div class="ms-decision-rec">
+                <div class="ms-decision-badge">Recommended</div>
+                <div class="ms-decision-name">${escapeHtml(rec.supplier_name || "—")}</div>
+                <div class="ms-decision-country">${escapeHtml(rec.country || "")}</div>
+              </div>
+              <div class="ms-decision-body">
+                <div class="ms-decision-section">
+                  <div class="ms-decision-label ms-decision-label-green">Why</div>
+                  <ul>${reasons || "<li>No specific reasons given.</li>"}</ul>
+                </div>
+                ${tradeoffs ? `<div class="ms-decision-section">
+                  <div class="ms-decision-label ms-decision-label-amber">Trade-offs</div>
+                  <ul>${tradeoffs}</ul>
+                </div>` : ""}
+                <div class="ms-decision-summary">${escapeHtml(s.summary || "")}</div>
+              </div>
+            </div>`;
+        } else {
+          answerEl.innerHTML = `<div class="ms-ai-result"><div class="ms-ai-label">AI Answer</div><div class="ms-ai-text">${escapeHtml(data.answer)}</div></div>`;
+        }
+      } catch (_) {
+        answerEl.innerHTML = '<div class="ms-ai-error">Could not reach the server.</div>';
+      }
+      btn.classList.remove("btn-running");
+      renderList();
+    }
+
+    // ── Filters ──
+    function wireFilters(containerId, setter) {
+      document.getElementById(containerId).addEventListener("click", e => {
+        const pill = e.target.closest(".ms-pill");
+        if (!pill) return;
+        document.querySelectorAll(`#${containerId} .ms-pill`).forEach(p => p.classList.remove("is-active"));
+        pill.classList.add("is-active");
+        setter(pill.dataset.value);
+        renderList();
+      });
+    }
+
+    // ── Init ──
+    wireFilters("filter-country", v => _filterCountry = v);
+    wireFilters("filter-risk", v => _filterRisk = v);
+    wireFilters("sort-by", v => _sortBy = v);
+    document.getElementById("ai-search-input").addEventListener("keydown", e => { if (e.key === "Enter") doAiSearch(); });
+    loadSuppliers();
+  </script>
+</body>
+</html>
