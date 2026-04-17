@@ -9,6 +9,66 @@
 // Save supplier to database
 // ---------------------------------------------------------------------------
 
+async function syncSavedButtonStates() {
+  try {
+    const resp = await fetch("/api/saved-suppliers");
+    if (!resp.ok) return;
+    const saved = await resp.json();
+    const savedKeys = new Set(saved.map(s => `${s.supplier_name}|${s.url || ""}`));
+    document.querySelectorAll(".save-btn").forEach(btn => {
+      const key = `${btn.dataset.supplierName || ""}|${btn.dataset.supplierUrl || ""}`;
+      const isSaved = savedKeys.has(key);
+      if (isSaved) {
+        btn.textContent = btn.classList.contains("save-btn-row") ? "Saved" : "Saved";
+        btn.disabled = true;
+        btn.classList.add("saved");
+      } else {
+        btn.textContent = btn.classList.contains("save-btn-row") ? "Save"
+          : btn.id === "winner-save-btn" ? "Save to My Suppliers" : "Save to My Suppliers";
+        btn.disabled = false;
+        btn.classList.remove("saved");
+      }
+    });
+  } catch (_) {}
+}
+
+// Restore cached analysis + resync save buttons on page show (covers back button / bfcache)
+function restoreCachedAnalysis() {
+  // One-time skip: when logo was clicked from another page, skip restore once
+  try {
+    if (sessionStorage.getItem("metalmind_show_idle_once") === "1") {
+      sessionStorage.removeItem("metalmind_show_idle_once");
+      showIdle();
+      return false;
+    }
+  } catch (_) {}
+  try {
+    const cached = sessionStorage.getItem("metalmind_last_analysis");
+    if (!cached) return false;
+    const data = JSON.parse(cached);
+    if (!data || !data.winner) return false;
+    renderResults(data);
+    showResults();
+    return true;
+  } catch (_) { return false; }
+}
+
+// Logo click on same-page just shows idle without losing cache
+function goToIdle() {
+  showIdle();
+}
+
+window.addEventListener("pageshow", (e) => {
+  // Only restore from cache when page was restored from bfcache
+  // (fresh page loads are handled by _init)
+  if (e.persisted) {
+    const idle = document.getElementById("idle-state");
+    const idleVisible = idle && idle.style.display !== "none";
+    if (idleVisible) restoreCachedAnalysis();
+  }
+  syncSavedButtonStates();
+});
+
 async function saveSupplier(supplier, btnEl) {
   btnEl.disabled = true;
   btnEl.textContent = "Saving...";
@@ -35,6 +95,7 @@ async function saveSupplier(supplier, btnEl) {
     if (resp.status === 409) {
       btnEl.textContent = "Saved";
       btnEl.classList.add("saved");
+      syncSavedButtonStates();
       return;
     }
     if (!resp.ok) {
@@ -44,6 +105,7 @@ async function saveSupplier(supplier, btnEl) {
     }
     btnEl.textContent = "Saved";
     btnEl.classList.add("saved");
+    syncSavedButtonStates();
   } catch (_) {
     btnEl.textContent = "Save";
     btnEl.disabled = false;
@@ -312,6 +374,8 @@ function renderResults(data) {
     winnerSaveBtn.textContent = "Save to My Suppliers";
     winnerSaveBtn.disabled = false;
     winnerSaveBtn.classList.remove("saved");
+    winnerSaveBtn.dataset.supplierName = winner.name;
+    winnerSaveBtn.dataset.supplierUrl = winner.url || "";
     winnerSaveBtn.onclick = () => saveSupplier(winner, winnerSaveBtn);
   }
 
@@ -342,7 +406,7 @@ function renderResults(data) {
         <summary>AI Insight</summary>
         <div class="ai-insight-container"></div>
       </details>
-      <button type="button" class="save-btn save-btn-card">Save to My Suppliers</button>
+      <button type="button" class="save-btn save-btn-card" data-supplier-name="${escapeHtml(s.name)}" data-supplier-url="${escapeHtml(s.url)}">Save to My Suppliers</button>
     `;
     const saveBtn = card.querySelector(".save-btn");
     saveBtn.addEventListener("click", () => saveSupplier(s, saveBtn));
@@ -375,7 +439,7 @@ function renderResults(data) {
       <td class="row-actions-cell">
         <span class="row-details-btn" data-action="details"><span class="row-details-btn-text">View</span><span class="row-details-btn-chevron">▸</span></span>
         <button class="row-insight-btn" data-action="insight" onclick="event.stopPropagation()">🔍 AI Insight</button>
-        <button class="save-btn save-btn-row" data-action="save" onclick="event.stopPropagation()">Save</button>
+        <button class="save-btn save-btn-row" data-action="save" data-supplier-name="${escapeHtml(s.name)}" data-supplier-url="${escapeHtml(s.url)}" onclick="event.stopPropagation()">Save</button>
       </td>
     `;
     tbody.appendChild(tr);
@@ -480,6 +544,9 @@ function finalize(data, error) {
     return;
   }
 
+  // Cache the result so Back-to-Analysis-Result restores it without re-running
+  try { sessionStorage.setItem("metalmind_last_analysis", JSON.stringify(data)); } catch (_) {}
+
   renderResults(data);
   showResults();
 }
@@ -490,6 +557,9 @@ function finalize(data, error) {
 // ---------------------------------------------------------------------------
 
 (function _init() {
+  // Restore last analysis result if cached
+  restoreCachedAnalysis();
+
   // Wire priority pills
   const pills = document.querySelectorAll(".priority-pill");
   pills.forEach(pill => {
