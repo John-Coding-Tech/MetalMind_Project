@@ -8,27 +8,25 @@
 </head>
 <body>
 
-  <!-- HEADER -->
-  <header class="header">
-    <div class="header-inner">
-      <a href="/" class="logo" aria-label="MetalMind AI home">
-        <img src="/static/Images/Metal_Logo.jpeg" alt="MetalMind AI" class="logo-img" />
-      </a>
-      <div class="header-right">
-        <span class="header-tagline">ACP Supplier Intelligence</span>
-      </div>
+  <!-- NAV — identical to landing page -->
+  <nav class="nav">
+    <a href="https://phykawing.github.io/MetalMind-FrontEnd/" class="nav-logo">
+      <img src="/static/Images/Logo.png" alt="MetalMind AI" class="nav-logo-img" />
+      <span class="nav-logo-name">Metal<span>Mind</span> AI</span>
+    </a>
+    <div class="nav-links">
+      <a href="https://phykawing.github.io/MetalMind-FrontEnd/#problem">Problem</a>
+      <a href="https://phykawing.github.io/MetalMind-FrontEnd/#solution">Solution</a>
+      <a href="https://phykawing.github.io/MetalMind-FrontEnd/#demo">Demo</a>
+      <a href="https://phykawing.github.io/MetalMind-FrontEnd/#ebitda">Financial Impact</a>
+      <a href="https://phykawing.github.io/MetalMind-FrontEnd/#team">Team</a>
+      <a href="https://phykawing.github.io/MetalMind-FrontEnd/#contact">Contact</a>
     </div>
-  </header>
+  </nav>
 
-  <!-- APP SHELL: single-column main content (sidebar removed) -->
   <div class="app-layout">
-
-    <!-- MAIN -->
     <main class="main-content">
       <div class="main-inner">
-
-        <!-- Back link — only visible on analysis pages (body.analysis-mode) -->
-        <a class="back-link" href="/">&larr; Back to mode selection</a>
 
         <!-- IDLE / LANDING -->
         <div id="idle-state" class="landing">
@@ -38,112 +36,38 @@
               Find the <span class="accent-grad">best-value, lowest-risk</span> ACP supplier
               <span class="landing-title-tail">across India &amp; China</span>
             </h1>
-            <button type="button" class="principle-badge" id="principle-badge" aria-label="Learn what 'Risk greater than Price' means">
-              <span class="principle-badge-icon">⚖️</span>
-              <span class="principle-badge-key">Risk &gt; Price</span>
-              <span class="principle-badge-sep">·</span>
-              <span class="principle-badge-cta">Learn more</span>
-              <span class="principle-badge-arrow">→</span>
-            </button>
-            <p class="landing-helper">
-              Pick a country priority, then choose an analysis mode. Prices in AUD (A$).
+          </section>
+
+          <section class="landing-action">
+            <p class="landing-sub">
+              Rule engine ranks suppliers. AI cross-checks the winner.
             </p>
-          </section>
-
-          <section class="priority-bar" aria-label="Country priority">
-            <span class="priority-bar-label">Country Priority</span>
-            <div class="priority-pills" role="radiogroup">
-              <button type="button" class="priority-pill is-active" data-value="Both Equal" role="radio" aria-checked="true">Both Equal</button>
-              <button type="button" class="priority-pill" data-value="India" role="radio" aria-checked="false">India</button>
-              <button type="button" class="priority-pill" data-value="China" role="radio" aria-checked="false">China</button>
+            <div class="landing-action-row">
+              <div class="priority-bar" aria-label="Country priority">
+                <span class="priority-bar-label">Priority</span>
+                <div class="priority-pills" role="radiogroup">
+                  <button type="button" class="priority-pill is-active" data-value="Both Equal" role="radio" aria-checked="true">Both Equal</button>
+                  <button type="button" class="priority-pill" data-value="India" role="radio" aria-checked="false">India</button>
+                  <button type="button" class="priority-pill" data-value="China" role="radio" aria-checked="false">China</button>
+                </div>
+              </div>
+              <button type="button" class="run-btn" id="run-btn" onclick="runAnalysis()">
+                <span class="run-btn-text">Run AI Cross-Checks Analysis</span>
+                <span class="run-btn-arrow">→</span>
+              </button>
             </div>
           </section>
 
-          <section class="mode-grid">
-
-            <!-- Rule-based -->
-            <button type="button" class="mode-card mode-rule" onclick="goToAnalysis('rule')">
-              <div class="mode-card-head">
-                <span class="mode-badge">01</span>
-                <span class="mode-tag">Fast · Deterministic</span>
-              </div>
-              <h3 class="mode-card-title">Calculation-Based Analysis</h3>
-              <p class="mode-card-desc">
-                Rule-driven risk and value scoring from hard data — prices, domain signals,
-                relevance. No AI, fully reproducible.
-              </p>
-              <ul class="mode-card-bullets">
-                <li>Tavily search + risk rules</li>
-                <li>Value score (0–100)</li>
-                <li>Top 3 + full ranked list</li>
-              </ul>
-              <div class="mode-card-cta">Run analysis <span class="cta-arrow">→</span></div>
-            </button>
-
-            <!-- AI-only -->
-            <button type="button" class="mode-card mode-ai" onclick="goToAnalysis('ai')">
-              <div class="mode-card-head">
-                <span class="mode-badge">02</span>
-                <span class="mode-tag">LLM Reasoning</span>
-              </div>
-              <h3 class="mode-card-title">AI Analysis</h3>
-              <p class="mode-card-desc">
-                Gemma evaluates each supplier independently — prose reasoning, risk flags,
-                and a holistic score.
-              </p>
-              <ul class="mode-card-bullets">
-                <li>Per-supplier AI judgement</li>
-                <li>Natural-language reasons</li>
-                <li>Ranked by AI score</li>
-              </ul>
-              <div class="mode-card-cta">Run analysis <span class="cta-arrow">→</span></div>
-            </button>
-
-            <!-- Comparison -->
-            <button type="button" class="mode-card mode-compare" onclick="goToAnalysis('comparison')">
-              <div class="mode-card-head">
-                <span class="mode-badge">03</span>
-                <span class="mode-tag">Expert vs AI</span>
-              </div>
-              <h3 class="mode-card-title">AI Comparison</h3>
-              <p class="mode-card-desc">
-                Run rules and AI side-by-side, then cross-check. Each candidate gets a
-                green / yellow / red decision tier.
-              </p>
-              <ul class="mode-card-bullets">
-                <li>Rule + AI, reconciled</li>
-                <li>Tiered recommendation</li>
-                <li>Highest trust, slowest</li>
-              </ul>
-              <div class="mode-card-cta">Run comparison <span class="cta-arrow">→</span></div>
-            </button>
-
-          </section>
-
-          <section class="landing-pipeline">
-            <div class="landing-pipeline-label">Pipeline</div>
-            <div class="how-it-works">
-              <div class="step-pill">01 Search via Tavily</div>
-              <div class="step-arrow">→</div>
-              <div class="step-pill">02 Clean Data</div>
-              <div class="step-arrow">→</div>
-              <div class="step-pill">03 Risk Score</div>
-              <div class="step-arrow">→</div>
-              <div class="step-pill">04 Value Score</div>
-              <div class="step-arrow">→</div>
-              <div class="step-pill">05 Rank</div>
-              <div class="step-arrow">→</div>
-              <div class="step-pill">06 Recommend</div>
-            </div>
-          </section>
+          <button type="button" class="principle-link" id="principle-badge">
+            ⚖️ Risk &gt; Price principle · <span>Learn more →</span>
+          </button>
 
         </div>
 
         <!-- LOADING -->
         <div id="loading-state" class="state-panel" style="display:none;">
           <div class="spinner"></div>
-          <p id="loading-msg" class="loading-msg">Searching suppliers...</p>
-          <div class="progress-steps" id="progress-steps"></div>
+          <p id="loading-msg" class="loading-msg">Analyzing suppliers...</p>
         </div>
 
         <!-- ERROR -->
@@ -156,12 +80,12 @@
         <!-- RESULTS -->
         <div id="results-state" style="display:none;">
 
-          <!-- Hero band: mode pill + winner summary + KPI cards -->
+          <!-- Winner card -->
           <section class="card winner-card" id="winner-card">
             <div class="winner-card-head">
               <span class="results-mode-pill" id="results-mode-pill">
                 <span class="results-mode-pill-icon">⚖️</span>
-                <span class="results-mode-pill-text" id="results-mode-name"></span>
+                <span class="results-mode-pill-text">MetalMind Analysis</span>
               </span>
               <span class="winner-badge" id="winner-badge">Recommended</span>
             </div>
@@ -187,16 +111,15 @@
               </div>
             </div>
 
-            <!-- Decision tier banner — AI Comparison only -->
-            <div class="decision-banner" id="winner-decision-banner" style="display:none;">
-              <div class="decision-banner-headline">
-                <span class="decision-banner-icon" id="winner-decision-icon"></span>
-                <span class="decision-banner-title" id="winner-decision-title"></span>
-              </div>
-              <div class="decision-banner-subtitle" id="winner-decision-subtitle"></div>
+            <!-- Trust signal banner -->
+            <div class="trust-banner" id="trust-banner" style="display:none;">
+              <span class="trust-banner-icon" id="trust-icon"></span>
+              <span class="trust-banner-title" id="trust-title"></span>
+              <span class="trust-banner-sub" id="trust-sub"></span>
             </div>
 
             <p class="winner-explanation" id="winner-explanation"></p>
+            <div id="winner-anomalies"></div>
             <details class="risk-details">
               <summary>Risk Details</summary>
               <pre id="winner-risk-note"></pre>
@@ -209,7 +132,7 @@
             <div id="top3-cards" class="top3-grid"></div>
           </section>
 
-          <!-- All Suppliers — collapsed by default -->
+          <!-- All Suppliers -->
           <section class="results-section">
             <details class="all-suppliers">
               <summary class="all-suppliers-summary">
@@ -221,14 +144,9 @@
                 <table class="supplier-table">
                   <thead>
                     <tr>
-                      <th>#</th>
-                      <th>Supplier</th>
-                      <th>Country</th>
-                      <th>Est. Price</th>
-                      <th>Risk</th>
-                      <th>Value Score</th>
-                      <th>URL</th>
-                      <th>Details</th>
+                      <th>#</th><th>Supplier</th><th>Country</th>
+                      <th>Est. Price</th><th>Risk</th><th>Value Score</th>
+                      <th>URL</th><th>Details</th>
                     </tr>
                   </thead>
                   <tbody id="all-tbody"></tbody>
@@ -239,45 +157,33 @@
 
         </div><!-- /results -->
 
-      </div><!-- /main-inner -->
+      </div>
     </main>
+  </div>
 
-  </div><!-- /app-layout -->
-
-  <!-- Risk > Price explainer modal -->
+  <!-- Risk > Price modal -->
   <div class="modal-overlay" id="principle-modal" hidden>
     <div class="modal" role="dialog" aria-modal="true" aria-labelledby="principle-modal-title">
       <button type="button" class="modal-close" id="principle-modal-close" aria-label="Close">×</button>
-
       <div class="modal-header">
         <span class="modal-icon">⚖️</span>
         <h2 class="modal-title" id="principle-modal-title">Risk &gt; Price</h2>
         <p class="modal-sub">The core principle behind every MetalMind recommendation.</p>
       </div>
-
       <div class="modal-body">
         <p>
-          Cheap does not mean good. A supplier offering rock-bottom pricing may
-          lack credentials, verifiable contact details, or a track record —
-          all signals of real business risk. MetalMind <strong>never</strong>
+          Cheap does not mean good. MetalMind <strong>never</strong>
           recommends the cheapest supplier blindly.
         </p>
-
         <h3 class="modal-h3">How it works</h3>
         <ul class="modal-list">
-          <li><strong>Risk score first</strong> — each supplier is scored on website quality, certifications, contact info, reviews, country/domain consistency, <em>and suspiciously low pricing</em> (a cheap outlier is itself a risk signal).</li>
-          <li><strong>Value formula</strong> — <code>value_score = price_score × (1 − 0.6 × risk_score)</code>. Higher risk directly reduces value.</li>
-          <li><strong>Soft cap on high-risk</strong> — once risk exceeds a threshold, value is smoothly capped, so a cheap-but-risky supplier cannot outrank a safer, pricier one.</li>
-          <li><strong>Three analysis modes</strong> —
-            <em>Calculation-Based</em> (pure rule-based scoring),
-            <em>AI Analysis</em> (a standalone LLM evaluation of every supplier),
-            and <em>AI Comparison</em> (rules and AI run in parallel, reconciled into a green/yellow/red decision tier).
-          </li>
+          <li><strong>Risk score first</strong> — scored on certifications, contact info, reviews, domain quality, and pricing signals.</li>
+          <li><strong>Value formula</strong> — <code>value = price_score × (1 − 0.6 × risk)</code>. Higher risk directly reduces value.</li>
+          <li><strong>AI cross-check</strong> — after ranking, AI audits the winner and flags anything the rules missed. Trust signal: Safe / Warning / Risk.</li>
         </ul>
-
         <div class="modal-callout">
           <span class="modal-callout-icon">💡</span>
-          <span><strong>Rule of thumb:</strong> If the price looks too good to be true, the risk score will usually confirm it.</span>
+          <span><strong>Rule of thumb:</strong> If the price looks too good to be true, the risk score usually confirms it.</span>
         </div>
       </div>
     </div>

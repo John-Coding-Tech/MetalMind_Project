@@ -1,7 +1,8 @@
 /**
- * frontend/app.js — MetalMind UI logic
+ * frontend/app.js — MetalMind Unified UI
  *
- * Calls POST /api/compare and renders the results.
+ * Single flow: Run → See results → Trust signal → Decide
+ * AI Insight is on-demand (click to load per supplier).
  */
 
 // ---------------------------------------------------------------------------
@@ -14,14 +15,6 @@ function _hideAllStates() {
   document.getElementById("error-state").style.display   = "none";
   document.getElementById("results-state").style.display = "none";
 }
-
-// ---------------------------------------------------------------------------
-// Run-state — legacy sidebar run buttons were removed; these are now no-ops
-// but kept so the runner functions below don't need conditional logic.
-// ---------------------------------------------------------------------------
-
-function _setRunning(_activeId)  { /* no sidebar run buttons on analysis page */ }
-function _resetRunButtons()      { /* no sidebar run buttons on analysis page */ }
 
 function showIdle() {
   _hideAllStates();
@@ -46,55 +39,37 @@ function showResults() {
 
 
 // ---------------------------------------------------------------------------
-// Progress animation
+// Loading animation — simple spinner + rotating message
 // ---------------------------------------------------------------------------
 
-const STEPS = [
-  "Searching India suppliers via Tavily...",
-  "Searching China suppliers via Tavily...",
-  "Cleaning and extracting data...",
-  "Scoring risk for each supplier...",
-  "Computing value scores...",
-  "Ranking and selecting Top 3...",
-  "Generating recommendation...",
+const _LOADING_MSGS = [
+  "Searching suppliers...",
+  "Analyzing data...",
+  "Scoring and ranking...",
+  "Almost there...",
 ];
 
 function animateProgress(onDone) {
-  const container = document.getElementById("progress-steps");
-  const msgEl     = document.getElementById("loading-msg");
-  container.innerHTML = "";
-
-  // Create all step elements
-  const stepEls = STEPS.map(text => {
-    const el = document.createElement("div");
-    el.className = "progress-step";
-    el.textContent = text;
-    container.appendChild(el);
-    return el;
-  });
-
+  const msgEl = document.getElementById("loading-msg");
   let i = 0;
   const interval = setInterval(() => {
-    if (i > 0) stepEls[i - 1].classList.replace("active", "done");
-    if (i < stepEls.length) {
-      stepEls[i].classList.add("active");
-      msgEl.textContent = STEPS[i];
-      i++;
+    i++;
+    if (i < _LOADING_MSGS.length) {
+      msgEl.textContent = _LOADING_MSGS[i];
     } else {
       clearInterval(interval);
       onDone();
     }
-  }, 400);
+  }, 1500);
 }
+
 
 // ---------------------------------------------------------------------------
 // Render helpers
 // ---------------------------------------------------------------------------
 
 function countryTag(country) {
-  const cls = country === "India" ? "tag-india"
-            : country === "China" ? "tag-china"
-            : "tag-unknown";
+  const cls = country === "India" ? "tag-india" : country === "China" ? "tag-china" : "tag-unknown";
   return `<span class="country-tag ${cls}">${country}</span>`;
 }
 
@@ -106,187 +81,302 @@ function formatPrice(usd, symbol, fx) {
   return `${symbol}${(usd * fx).toFixed(2)}/sqm`;
 }
 
+function escapeHtml(s) {
+  return String(s).replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;").replace(/'/g, "&#039;");
+}
+
+function riskReasonsList(reasons) {
+  if (!reasons || !reasons.length) return '<li class="risk-reason-empty">No risk signals detected.</li>';
+  return reasons.map(r => `<li>${escapeHtml(r)}</li>`).join("");
+}
+
+// Anomaly block
+function anomaliesHTML(anomalies) {
+  if (!anomalies || !anomalies.anomalies || !anomalies.anomalies.length || anomalies.severity === "none") return "";
+  const sev = anomalies.severity || "low";
+  const label = sev === "high" ? "HIGH" : sev === "medium" ? "MEDIUM" : "LOW";
+  const items = anomalies.anomalies.map(a => `<li>${escapeHtml(a)}</li>`).join("");
+  return `<div class="anomaly-block anomaly-${sev}">
+    <div class="anomaly-head"><span class="anomaly-icon">⚠</span><span class="anomaly-title">Anomalies</span><span class="anomaly-sev">${label}</span></div>
+    <ul class="anomaly-list">${items}</ul></div>`;
+}
+
+// AI adjustment badge
+function aiAdjBadge(supplier) {
+  const adj = supplier.ai_adjustment;
+  if (!adj || !adj.adjustment) return "";
+  const val = adj.adjustment;
+  const sign = val > 0 ? "+" : "";
+  const cls = val > 0 ? "ai-adj-pos" : "ai-adj-neg";
+  const tip = escapeHtml(adj.reason || "AI adjustment");
+  return `<span class="ai-adj-badge ${cls}" title="${tip}">${sign}${val} AI</span>`;
+}
+
+function valueScoreHTML(supplier) {
+  return `${supplier.value_score}/100 ${aiAdjBadge(supplier)}`;
+}
+
+// Trust signal — authoritative verdict labels
+const TRUST_META = {
+  safe:    { icon: "🛡", label: "AI VERIFIED — SAFE",    sub: "Rules and AI agree — no additional concerns" },
+  warning: { icon: "🛡", label: "AI VERIFIED — WARNING", sub: "AI raised warnings not captured by rules" },
+  risk:    { icon: "🛡", label: "AI VERIFIED — RISK",    sub: "AI flagged a serious concern — review alternatives" },
+};
+
+function trustBadgeHTML(trust) {
+  if (!trust || !TRUST_META[trust]) return "";
+  const m = TRUST_META[trust];
+  return `<span class="trust-badge trust-${trust}" title="${m.sub}">${m.icon} ${m.label}</span>`;
+}
+
+// Data confidence — derived from supplier quality signals (not AI)
+function dataConfidence(supplier) {
+  let signals = 0;
+  if (supplier.price_usd)                          signals++;
+  if (supplier.url && supplier.url !== "#")         signals++;
+  if (supplier.description && supplier.description.length > 80) signals++;
+  if (supplier.risk_level === "Low")               signals++;
+  if (supplier.risk_reasons && supplier.risk_reasons.length > 0
+      && supplier.risk_reasons[0] !== "No risk signals detected") signals++;
+  if (signals >= 4) return { level: "High",   cls: "conf-high" };
+  if (signals >= 2) return { level: "Medium", cls: "conf-med" };
+  return                    { level: "Low",    cls: "conf-low" };
+}
+
+function confidenceHTML(supplier) {
+  const c = dataConfidence(supplier);
+  return `<span class="data-conf ${c.cls}">Confidence: ${c.level}</span>`;
+}
+
+
+// ---------------------------------------------------------------------------
+// On-demand AI Insight (loaded per supplier on click)
+// ---------------------------------------------------------------------------
+
+async function fetchInsight(name, containerEl) {
+  containerEl.innerHTML = '<div class="insight-loading">Loading AI insight...</div>';
+
+  try {
+    const resp = await fetch("/api/insight", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ name }),
+    });
+    if (!resp.ok) {
+      const err = await resp.json().catch(() => ({}));
+      containerEl.innerHTML = `<div class="insight-error">${escapeHtml(err.detail || "Failed to load insight.")}</div>`;
+      return;
+    }
+    const data = await resp.json();
+    if (data.source === "fallback") {
+      containerEl.innerHTML = '<div class="insight-error">AI insight unavailable for this supplier.</div>';
+      return;
+    }
+
+    const section = (label, items) => {
+      if (!items || !items.length) return "";
+      return `<div class="ai-insight-section"><div class="ai-insight-label">${label}</div><ul>${items.map(s => `<li>${escapeHtml(s)}</li>`).join("")}</ul></div>`;
+    };
+
+    // Quick glance: 1 strength + 1 risk (scannable in <3 seconds)
+    const topStrength = data.key_strengths?.[0];
+    const topRisk     = data.key_risks?.[0];
+    const quickLines  = [
+      topStrength ? `<div class="insight-quick-line insight-quick-pos">+ ${escapeHtml(topStrength)}</div>` : "",
+      topRisk     ? `<div class="insight-quick-line insight-quick-neg">- ${escapeHtml(topRisk)}</div>` : "",
+    ].filter(Boolean).join("");
+
+    // Full details — collapsed by default
+    const fullSection = [
+      section("Key Strengths", data.key_strengths),
+      section("Key Risks", data.key_risks),
+      section("Hidden Signals", data.hidden_signals),
+    ].filter(Boolean).join("");
+
+    containerEl.innerHTML = `
+      <div class="ai-insight-body">
+        <p class="ai-insight-summary">${escapeHtml(data.summary)}</p>
+        ${quickLines}
+        ${fullSection ? `<details class="insight-full"><summary class="insight-full-toggle">Show full analysis</summary>${fullSection}</details>` : ""}
+        <div class="ai-insight-conf">AI Confidence: ${(data.confidence * 100).toFixed(0)}%</div>
+      </div>
+    `;
+  } catch (_) {
+    containerEl.innerHTML = '<div class="insight-error">Could not reach the server.</div>';
+  }
+}
+
+
 // ---------------------------------------------------------------------------
 // Render results
 // ---------------------------------------------------------------------------
 
-const TIER_META = {
-  green:  { icon: "🟢", title: "Strongly Recommended",       subtitle: "Approved by both rule-based scoring and AI" },
-  yellow: { icon: "🟡", title: "Recommended with Caution",   subtitle: "AI detected additional risks — review before choosing" },
-  red:    { icon: "🔴", title: "Not Recommended",            subtitle: "AI rejects this supplier — consider the next option" },
-};
-
-function tierBadgeHTML(tier) {
-  if (!tier || !TIER_META[tier]) return "";
-  const m = TIER_META[tier];
-  return `<span class="tier-badge tier-${tier}" title="${m.title}">${m.icon} ${m.title}</span>`;
-}
-
-function escapeHtml(s) {
-  return String(s)
-    .replace(/&/g, "&amp;")
-    .replace(/</g, "&lt;")
-    .replace(/>/g, "&gt;")
-    .replace(/"/g, "&quot;")
-    .replace(/'/g, "&#039;");
-}
-
-function riskReasonsList(reasons) {
-  if (!reasons || !reasons.length) {
-    return '<li class="risk-reason-empty">No risk signals detected.</li>';
-  }
-  return reasons.map(r => `<li>${escapeHtml(r)}</li>`).join("");
-}
-
 function renderResults(data) {
-  const { winner, top3, all_suppliers, explanation, risk_note, symbol, fx, decision } = data;
+  const { winner, top3, all_suppliers, explanation, risk_note, symbol, fx, decision, trust } = data;
 
-  const countEl = document.getElementById("all-suppliers-count");
-  if (countEl) countEl.textContent = `${all_suppliers.length}`;
+  document.getElementById("all-suppliers-count").textContent = `${all_suppliers.length}`;
 
-  // Winner badge — reflects backend decision (recommended vs not_recommended)
+  // Winner badge
   const badge = document.getElementById("winner-badge");
-  if (badge) {
-    const isRec = (decision || "recommended") === "recommended";
-    badge.textContent = isRec ? "Recommended" : "Not Recommended";
-    badge.classList.toggle("winner-badge-not-recommended", !isRec);
-  }
+  const isRec = (decision || "recommended") === "recommended";
+  badge.textContent = isRec ? "Recommended" : "Not Recommended";
+  badge.classList.toggle("winner-badge-not-recommended", !isRec);
 
-  // Winner decision-tier banner (AI Comparison mode only)
-  const tierBanner = document.getElementById("winner-decision-banner");
-  if (tierBanner) {
-    if (winner.decision_tier && TIER_META[winner.decision_tier]) {
-      const m = TIER_META[winner.decision_tier];
-      tierBanner.style.display = "";
-      tierBanner.className = `decision-banner decision-banner-${winner.decision_tier}`;
-      document.getElementById("winner-decision-icon").textContent     = m.icon;
-      document.getElementById("winner-decision-title").textContent    = m.title;
-      document.getElementById("winner-decision-subtitle").textContent = m.subtitle;
-    } else {
-      tierBanner.style.display = "none";
-    }
+  // Trust signal banner — authoritative verdict
+  const trustBanner = document.getElementById("trust-banner");
+  if (trust && TRUST_META[trust]) {
+    const m = TRUST_META[trust];
+    const conf = dataConfidence(winner);
+    trustBanner.style.display = "";
+    trustBanner.className = `trust-banner trust-banner-${trust}`;
+    document.getElementById("trust-icon").textContent  = m.icon;
+    document.getElementById("trust-title").textContent = m.label;
+    document.getElementById("trust-sub").innerHTML     =
+      `${escapeHtml(m.sub)} <span class="data-conf ${conf.cls}">Confidence: ${conf.level}</span>`;
+  } else {
+    trustBanner.style.display = "none";
   }
 
   // Winner card
-  document.getElementById("winner-name").textContent    = winner.name;
+  document.getElementById("winner-name").textContent       = winner.name;
   document.getElementById("winner-explanation").textContent = explanation;
   document.getElementById("winner-risk-note").textContent   = risk_note;
-  document.getElementById("winner-price").textContent   = winner.price_usd ? formatPrice(winner.price_usd, symbol, fx) : "—";
-  document.getElementById("winner-score").textContent   = `${winner.value_score}/100`;
-  document.getElementById("winner-country").outerHTML   =
+  document.getElementById("winner-price").textContent = winner.price_usd ? formatPrice(winner.price_usd, symbol, fx) : "—";
+  const winnerScoreEl = document.getElementById("winner-score");
+  winnerScoreEl.innerHTML = valueScoreHTML(winner);
+  document.getElementById("winner-country").outerHTML =
     `<span class="country-tag ${winner.country === "India" ? "tag-india" : winner.country === "China" ? "tag-china" : "tag-unknown"}" id="winner-country">${winner.country}</span>`;
 
   const riskEl = document.getElementById("winner-risk");
-  riskEl.textContent  = winner.risk_level;
-  riskEl.className    = `kpi-value ${riskClass(winner.risk_level)}`;
+  riskEl.textContent = winner.risk_level;
+  riskEl.className   = `kpi-value ${riskClass(winner.risk_level)}`;
+
+  const winnerAnomaliesEl = document.getElementById("winner-anomalies");
+  if (winnerAnomaliesEl) winnerAnomaliesEl.innerHTML = anomaliesHTML(winner.anomalies);
 
   // Top 3 cards
   const top3Container = document.getElementById("top3-cards");
   top3Container.innerHTML = "";
   top3.forEach((s, idx) => {
     const rankClass = idx === 0 ? "rank-1" : idx === 1 ? "rank-2" : "";
-    const rankLabel = String(idx + 1);
     const card = document.createElement("div");
     card.className = `supplier-card ${rankClass}`;
     card.innerHTML = `
-      <div class="card-rank">${rankLabel}</div>
+      <div class="card-rank">${idx + 1}</div>
       <div class="card-name">${s.name}</div>
       <div class="card-meta">
         ${countryTag(s.country)}
-        ${tierBadgeHTML(s.decision_tier)}
+        ${trustBadgeHTML(s.trust)}
+        ${confidenceHTML(s)}
       </div>
       <div class="card-stats">
-        <div>
-          <div class="card-stat-label">Est. Price</div>
-          <div class="card-stat-value">${s.price_usd ? formatPrice(s.price_usd, symbol, fx) : "—"}</div>
-        </div>
-        <div>
-          <div class="card-stat-label">Risk</div>
-          <div class="card-stat-value ${riskClass(s.risk_level)}">${s.risk_level}</div>
-        </div>
-        <div>
-          <div class="card-stat-label">Value Score</div>
-          <div class="card-stat-value">${s.value_score}/100</div>
-        </div>
-        <div>
-          <div class="card-stat-label">Price Found</div>
-          <div class="card-stat-value" style="font-size:12px;color:var(--muted)">${s.price_raw}</div>
-        </div>
+        <div><div class="card-stat-label">Est. Price</div><div class="card-stat-value">${s.price_usd ? formatPrice(s.price_usd, symbol, fx) : "—"}</div></div>
+        <div><div class="card-stat-label">Risk</div><div class="card-stat-value ${riskClass(s.risk_level)}">${s.risk_level}</div></div>
+        <div><div class="card-stat-label">Value Score</div><div class="card-stat-value">${valueScoreHTML(s)}</div></div>
       </div>
-      <div class="card-url">
-        <a href="${s.url}" target="_blank" rel="noopener">${s.url}</a>
-      </div>
-      <details class="card-risk-details">
-        <summary>Risk Details</summary>
-        <ul class="risk-reasons">${riskReasonsList(s.risk_reasons)}</ul>
+      <div class="card-url"><a href="${s.url}" target="_blank" rel="noopener">${s.url}</a></div>
+      ${anomaliesHTML(s.anomalies)}
+      <details class="card-risk-details"><summary>Risk Details</summary><ul class="risk-reasons">${riskReasonsList(s.risk_reasons)}</ul></details>
+      <details class="ai-insight" data-supplier="${escapeHtml(s.name)}">
+        <summary>AI Insight</summary>
+        <div class="ai-insight-container"></div>
       </details>
     `;
+    // Wire on-demand insight loading
+    const insightDetails = card.querySelector(".ai-insight");
+    let insightLoaded = false;
+    insightDetails.addEventListener("toggle", () => {
+      if (insightDetails.open && !insightLoaded) {
+        insightLoaded = true;
+        fetchInsight(s.name, insightDetails.querySelector(".ai-insight-container"));
+      }
+    });
     top3Container.appendChild(card);
   });
 
-  // All suppliers table — each supplier renders as a main row + a hidden
-  // details row. Clicking the main row (or its chevron) toggles expansion.
+  // All suppliers table
   const tbody = document.getElementById("all-tbody");
   tbody.innerHTML = "";
   all_suppliers.forEach((s, idx) => {
-    const rankBadgeClass = idx === 0 ? "r1" : idx === 1 ? "r2" : "";
-    const rowClass = idx === 0 ? "winner-row" : "";
-
     const tr = document.createElement("tr");
-    tr.className = `supplier-row ${rowClass}`;
+    tr.className = `supplier-row ${idx === 0 ? "winner-row" : ""}`;
     tr.innerHTML = `
-      <td><span class="rank-badge ${rankBadgeClass}">${s.rank}</span></td>
-      <td>${s.name}</td>
+      <td><span class="rank-badge ${idx === 0 ? "r1" : idx === 1 ? "r2" : ""}">${s.rank}</span></td>
+      <td>${s.name} ${trustBadgeHTML(s.trust)}</td>
       <td>${countryTag(s.country)}</td>
       <td>${s.price_usd ? formatPrice(s.price_usd, symbol, fx) : "—"}</td>
       <td class="${riskClass(s.risk_level)}">${s.risk_level}</td>
-      <td>${s.value_score}/100</td>
+      <td>${valueScoreHTML(s)}</td>
       <td><a href="${s.url}" target="_blank" rel="noopener" style="font-size:12px" onclick="event.stopPropagation()">${new URL(s.url).hostname}</a></td>
-      <td class="row-details-cell">
-        <span class="row-details-btn">
-          <span class="row-details-btn-text">View</span>
-          <span class="row-details-btn-chevron">▸</span>
-        </span>
+      <td class="row-actions-cell">
+        <span class="row-details-btn" data-action="details"><span class="row-details-btn-text">View</span><span class="row-details-btn-chevron">▸</span></span>
+        <button class="row-insight-btn" data-action="insight" onclick="event.stopPropagation()">🔍 AI Insight</button>
       </td>
     `;
     tbody.appendChild(tr);
 
     const detailsRow = document.createElement("tr");
     detailsRow.className = "supplier-row-details";
-    detailsRow.innerHTML = `
-      <td colspan="8">
-        <div class="row-details-inner">
-          <div class="row-details-header">Risk Details</div>
-          <ul class="risk-reasons">${riskReasonsList(s.risk_reasons)}</ul>
-        </div>
-      </td>
-    `;
+    detailsRow.innerHTML = `<td colspan="8"><div class="row-details-inner">
+      ${anomaliesHTML(s.anomalies)}
+      <div class="row-details-header">Risk Details</div>
+      <ul class="risk-reasons">${riskReasonsList(s.risk_reasons)}</ul>
+      <div class="row-insight-panel" style="display:none;"></div>
+    </div></td>`;
     tbody.appendChild(detailsRow);
 
+    // "View" — toggle risk details
     const btnText = tr.querySelector(".row-details-btn-text");
-    tr.addEventListener("click", () => {
+    tr.querySelector('[data-action="details"]').addEventListener("click", (e) => {
+      e.stopPropagation();
       const expanded = tr.classList.toggle("is-expanded");
       detailsRow.classList.toggle("is-visible", expanded);
       if (btnText) btnText.textContent = expanded ? "Hide" : "View";
     });
+
+    // "🔍 AI Insight" — expand row + load insight on demand
+    let insightLoaded = false;
+    tr.querySelector('[data-action="insight"]').addEventListener("click", () => {
+      // Ensure row is expanded
+      if (!tr.classList.contains("is-expanded")) {
+        tr.classList.add("is-expanded");
+        detailsRow.classList.add("is-visible");
+        if (btnText) btnText.textContent = "Hide";
+      }
+
+      const panel = detailsRow.querySelector(".row-insight-panel");
+      panel.style.display = "";
+
+      if (!insightLoaded) {
+        insightLoaded = true;
+        fetchInsight(s.name, panel);
+      }
+
+      // Scroll the insight into view
+      setTimeout(() => panel.scrollIntoView({ behavior: "smooth", block: "nearest" }), 100);
+    });
   });
 }
 
+
 // ---------------------------------------------------------------------------
-// Main: run comparison
+// Main: single unified analysis
 // ---------------------------------------------------------------------------
 
-async function runComparison() {
-  const maxResults = 8;
-  const priority   = _currentPriority();
+function _currentPriority() {
+  const active = document.querySelector(".priority-pill.is-active");
+  return active ? active.dataset.value : "Both Equal";
+}
+
+async function runAnalysis() {
+  const priority = _currentPriority();
+  const btn = document.getElementById("run-btn");
+  if (btn) btn.classList.add("btn-running");
 
   showLoading();
-  _setRunning("run-btn");
 
-  let apiDone   = false;
-  let animDone  = false;
-  let apiResult = null;
-  let apiError  = null;
+  let apiDone = false, animDone = false, apiResult = null, apiError = null;
 
   animateProgress(() => {
     animDone = true;
@@ -294,22 +384,18 @@ async function runComparison() {
   });
 
   try {
-    const resp = await fetch("/api/compare", {
+    const resp = await fetch("/api/analyze", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        max_results: maxResults,
-        priority,
-      }),
+      body: JSON.stringify({ max_results: 5, priority }),
     });
-
     if (!resp.ok) {
-      const err = await resp.json();
-      apiError = err.detail || "Unknown error from server.";
+      const err = await resp.json().catch(() => ({}));
+      apiError = err.detail || `Server error (${resp.status})`;
     } else {
       apiResult = await resp.json();
     }
-  } catch (e) {
+  } catch (_) {
     apiError = "Could not reach the server. Make sure the backend is running.";
   }
 
@@ -318,7 +404,8 @@ async function runComparison() {
 }
 
 function finalize(data, error) {
-  _resetRunButtons();
+  const btn = document.getElementById("run-btn");
+  if (btn) btn.classList.remove("btn-running");
 
   if (error || !data) {
     showError(error || "No data returned.");
@@ -329,275 +416,32 @@ function finalize(data, error) {
   showResults();
 }
 
-// ---------------------------------------------------------------------------
-// Phase 2 — Expert vs AI Comparison
-// ---------------------------------------------------------------------------
-
-const AI_STEPS = [
-  "Searching suppliers via Tavily...",
-  "Cleaning and extracting data...",
-  "Running rule-based expert scoring...",
-  "Querying AI (Gemma) for each supplier...",
-  "Comparing Expert vs AI decisions...",
-];
-
-function animateAiProgress(onDone) {
-  const container = document.getElementById("progress-steps");
-  const msgEl     = document.getElementById("loading-msg");
-  container.innerHTML = "";
-
-  const stepEls = AI_STEPS.map(text => {
-    const el = document.createElement("div");
-    el.className = "progress-step";
-    el.textContent = text;
-    container.appendChild(el);
-    return el;
-  });
-
-  let i = 0;
-  const interval = setInterval(() => {
-    if (i > 0) stepEls[i - 1].classList.replace("active", "done");
-    if (i < stepEls.length) {
-      stepEls[i].classList.add("active");
-      msgEl.textContent = AI_STEPS[i];
-      i++;
-    } else {
-      // Loop the last step while AI is still running
-      msgEl.textContent = "Still querying AI — this may take a minute...";
-      clearInterval(interval);
-      onDone();
-    }
-  }, 900);
-}
-
-async function runAiComparison() {
-  const priority = _currentPriority();
-
-  showLoading();
-  _setRunning("run-ai-btn");
-
-  let apiDone = false, animDone = false, apiResult = null, apiError = null;
-
-  animateAiProgress(() => { animDone = true; if (apiDone) finalizeAi(apiResult, apiError); });
-
-  try {
-    const resp = await fetch("/api/compare-with-ai", {
-      method:  "POST",
-      headers: { "Content-Type": "application/json" },
-      body:    JSON.stringify({ max_results: 8, priority }),
-    });
-    if (!resp.ok) {
-      const err = await resp.json().catch(() => ({}));
-      apiError = err.detail || `Server error (${resp.status})`;
-    } else {
-      apiResult = await resp.json();
-    }
-  } catch (_) {
-    apiError = "Could not reach the server.";
-  }
-
-  apiDone = true;
-  if (animDone) finalizeAi(apiResult, apiError);
-}
-
-function finalizeAi(data, error) {
-  _resetRunButtons();
-
-  if (error || !data) {
-    showError(error || "No AI comparison data returned.");
-    return;
-  }
-
-  // /api/compare-with-ai now returns the SAME shape as /api/compare,
-  // with per-supplier decision_tier added. Reuse the standard renderer.
-  renderResults(data);
-  showResults();
-}
 
 // ---------------------------------------------------------------------------
-// Phase 2.5 — AI-Only Analysis
+// Init
 // ---------------------------------------------------------------------------
 
-const AI_ONLY_STEPS = [
-  "Searching suppliers via Tavily...",
-  "Cleaning and extracting data...",
-  "Selecting top candidates by relevance...",
-  "Querying AI (Gemma) for each supplier...",
-  "Sorting by AI score...",
-];
-
-function animateAiOnlyProgress(onDone) {
-  const container = document.getElementById("progress-steps");
-  const msgEl     = document.getElementById("loading-msg");
-  container.innerHTML = "";
-
-  const stepEls = AI_ONLY_STEPS.map(text => {
-    const el = document.createElement("div");
-    el.className = "progress-step";
-    el.textContent = text;
-    container.appendChild(el);
-    return el;
-  });
-
-  let i = 0;
-  const interval = setInterval(() => {
-    if (i > 0) stepEls[i - 1].classList.replace("active", "done");
-    if (i < stepEls.length) {
-      stepEls[i].classList.add("active");
-      msgEl.textContent = AI_ONLY_STEPS[i];
-      i++;
-    } else {
-      msgEl.textContent = "Still querying AI — this may take a minute...";
-      clearInterval(interval);
-      onDone();
-    }
-  }, 900);
-}
-
-async function runAiOnly() {
-  const priority = _currentPriority();
-
-  showLoading();
-  _setRunning("run-ai-only-btn");
-
-  let apiDone = false, animDone = false, apiResult = null, apiError = null;
-
-  animateAiOnlyProgress(() => { animDone = true; if (apiDone) finalizeAiOnly(apiResult, apiError); });
-
-  try {
-    const resp = await fetch("/api/ai-only", {
-      method:  "POST",
-      headers: { "Content-Type": "application/json" },
-      body:    JSON.stringify({ max_results: 8, priority }),
-    });
-    if (!resp.ok) {
-      const err = await resp.json().catch(() => ({}));
-      apiError = err.detail || `Server error (${resp.status})`;
-    } else {
-      apiResult = await resp.json();
-    }
-  } catch (_) {
-    apiError = "Could not reach the server.";
-  }
-
-  apiDone = true;
-  if (animDone) finalizeAiOnly(apiResult, apiError);
-}
-
-function finalizeAiOnly(data, error) {
-  _resetRunButtons();
-
-  if (error || !data) {
-    showError(error || "No AI results returned.");
-    return;
-  }
-
-  // AI-only results use the SAME response shape as /api/compare,
-  // so we reuse the exact same renderer + state panel.
-  renderResults(data);
-  showResults();
-}
-
-// ---------------------------------------------------------------------------
-// URL-based navigation — each mode is a dedicated "page" under /analysis
-// ---------------------------------------------------------------------------
-
-const _MODE_TO_RUNNER = {
-  rule:       () => runComparison(),
-  ai:         () => runAiOnly(),
-  comparison: () => runAiComparison(),
-};
-
-const _MODE_TO_TITLE = {
-  rule:       "Calculation-Based Analysis (No AI)",
-  ai:         "AI Analysis",
-  comparison: "AI Comparison (Expert vs AI)",
-};
-
-// Country priority source of truth:
-//   - Landing page: the active .priority-pill
-//   - Analysis page: the ?priority URL param (set when the user came from landing)
-// Defaults to "Both Equal" if neither is present.
-function _currentPriority() {
-  const active = document.querySelector(".priority-pill.is-active");
-  if (active) return active.dataset.value;
-  const param = new URLSearchParams(window.location.search).get("priority");
-  return param || "Both Equal";
-}
-
-// Risk > Price explainer modal — opens on badge click, closes on backdrop
-// click, the × button, or ESC. Locks body scroll while open.
-function _wirePrincipleModal() {
-  const badge   = document.getElementById("principle-badge");
-  const overlay = document.getElementById("principle-modal");
-  const closeBtn = document.getElementById("principle-modal-close");
-  if (!badge || !overlay) return;
-
-  const open = () => {
-    overlay.hidden = false;
-    document.body.classList.add("modal-open");
-  };
-  const close = () => {
-    overlay.hidden = true;
-    document.body.classList.remove("modal-open");
-  };
-
-  badge.addEventListener("click", open);
-  closeBtn?.addEventListener("click", close);
-  overlay.addEventListener("click", e => { if (e.target === overlay) close(); });
-  document.addEventListener("keydown", e => {
-    if (e.key === "Escape" && !overlay.hidden) close();
-  });
-}
-
-function _wireLandingPriorityPills() {
+(function _init() {
+  // Wire priority pills
   const pills = document.querySelectorAll(".priority-pill");
   pills.forEach(pill => {
     pill.addEventListener("click", () => {
-      pills.forEach(p => {
-        p.classList.remove("is-active");
-        p.setAttribute("aria-checked", "false");
-      });
+      pills.forEach(p => { p.classList.remove("is-active"); p.setAttribute("aria-checked", "false"); });
       pill.classList.add("is-active");
       pill.setAttribute("aria-checked", "true");
     });
   });
-}
 
-function goToAnalysis(mode) {
-  const priority = _currentPriority();
-  const url = `/analysis?mode=${encodeURIComponent(mode)}&priority=${encodeURIComponent(priority)}`;
-  window.open(url, "_blank", "noopener");
-}
-
-// On page load:
-//   - No ?mode    → landing page (wire up priority pills)
-//   - ?mode=X[&priority] → analysis page (apply mode theme, run)
-(function _bootFromUrl() {
-  const params = new URLSearchParams(window.location.search);
-  const mode   = params.get("mode");
-  const runner = _MODE_TO_RUNNER[mode];
-
-  if (!runner) {
-    document.body.classList.add("landing-mode");
-    _wireLandingPriorityPills();
-    _wirePrincipleModal();
-    return;
+  // Wire principle modal
+  const badge   = document.getElementById("principle-badge");
+  const overlay = document.getElementById("principle-modal");
+  const closeBtn = document.getElementById("principle-modal-close");
+  if (badge && overlay) {
+    const open  = () => { overlay.hidden = false; document.body.classList.add("modal-open"); };
+    const close = () => { overlay.hidden = true;  document.body.classList.remove("modal-open"); };
+    badge.addEventListener("click", open);
+    closeBtn?.addEventListener("click", close);
+    overlay.addEventListener("click", e => { if (e.target === overlay) close(); });
+    document.addEventListener("keydown", e => { if (e.key === "Escape" && !overlay.hidden) close(); });
   }
-
-  // Analysis page
-  document.body.classList.add("analysis-mode");
-
-  const titleEl = document.getElementById("results-mode-name");
-  if (titleEl) titleEl.textContent = _MODE_TO_TITLE[mode] || "";
-
-  // Apply mode theme to results container — drives accent colors + gradient border
-  const resultsEl = document.getElementById("results-state");
-  if (resultsEl) {
-    resultsEl.classList.remove("mode-rule", "mode-ai", "mode-compare");
-    const modeClass = { rule: "mode-rule", ai: "mode-ai", comparison: "mode-compare" }[mode];
-    if (modeClass) resultsEl.classList.add(modeClass);
-  }
-
-  runner();
 })();

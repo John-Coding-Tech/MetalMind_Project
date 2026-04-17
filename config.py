@@ -50,6 +50,6 @@ AI_RISK_ESCALATION: float = 0.25
 # Pipeline sizing (can also be overridden via env vars in main.py)
 # ---------------------------------------------------------------------------
 
-AI_COMPARE_TOP_N_DEFAULT: int = 16
-AI_ONLY_TOP_N_DEFAULT:    int = 16
-AI_MAX_PARALLEL_DEFAULT:  int = 4
+AI_COMPARE_TOP_N_DEFAULT: int = 3
+AI_ONLY_TOP_N_DEFAULT:    int = 3
+AI_MAX_PARALLEL_DEFAULT:  int = 5
