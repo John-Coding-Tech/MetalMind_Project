@@ -346,30 +346,43 @@
 
         if (data.structured) {
           const s = data.structured;
-          const rec = s.recommendation || {};
-          const reasons = (rec.reasons || []).map(r => `<li>${escapeHtml(r)}</li>`).join("");
-          const tradeoffs = (rec.tradeoffs || []).map(t => `<li>${escapeHtml(t)}</li>`).join("");
           _highlights = s.highlights || [];
 
-          answerEl.innerHTML = `
-            <div class="ms-decision-card">
-              <div class="ms-decision-rec">
-                <div class="ms-decision-badge">Recommended</div>
-                <div class="ms-decision-name">${escapeHtml(rec.supplier_name || "—")}</div>
-                <div class="ms-decision-country">${escapeHtml(rec.country || "")}</div>
-              </div>
-              <div class="ms-decision-body">
-                <div class="ms-decision-section">
-                  <div class="ms-decision-label ms-decision-label-green">Why</div>
-                  <ul>${reasons || "<li>No specific reasons given.</li>"}</ul>
+          const renderRecCard = (rec, summary, extraInfo) => {
+            const reasons = (rec.reasons || []).map(r => `<li>${escapeHtml(r)}</li>`).join("");
+            const tradeoffs = (rec.tradeoffs || []).map(t => `<li>${escapeHtml(t)}</li>`).join("");
+            return `
+              <div class="ms-decision-card">
+                <div class="ms-decision-rec">
+                  <div class="ms-decision-badge">Recommended</div>
+                  <div class="ms-decision-name">${escapeHtml(rec.supplier_name || "—")}</div>
+                  <div class="ms-decision-country">${escapeHtml(rec.country || "")}</div>
                 </div>
-                ${tradeoffs ? `<div class="ms-decision-section">
-                  <div class="ms-decision-label ms-decision-label-amber">Trade-offs</div>
-                  <ul>${tradeoffs}</ul>
-                </div>` : ""}
-                <div class="ms-decision-summary">${escapeHtml(s.summary || "")}</div>
-              </div>
-            </div>`;
+                <div class="ms-decision-body">
+                  <div class="ms-decision-section">
+                    <div class="ms-decision-label ms-decision-label-green">Why</div>
+                    <ul>${reasons || "<li>No specific reasons given.</li>"}</ul>
+                  </div>
+                  ${tradeoffs ? `<div class="ms-decision-section">
+                    <div class="ms-decision-label ms-decision-label-amber">Trade-offs</div>
+                    <ul>${tradeoffs}</ul>
+                  </div>` : ""}
+                  ${extraInfo ? `<div class="ms-decision-section">
+                    <div class="ms-decision-label ms-decision-label-green">Details</div>
+                    <div class="ms-decision-info">${escapeHtml(extraInfo)}</div>
+                  </div>` : ""}
+                  ${summary ? `<div class="ms-decision-summary">${escapeHtml(summary)}</div>` : ""}
+                </div>
+              </div>`;
+          };
+
+          if (s.type === "mixed" && s.recommendation) {
+            answerEl.innerHTML = renderRecCard(s.recommendation, s.summary, s.info);
+          } else if (s.type === "recommendation" && s.recommendation) {
+            answerEl.innerHTML = renderRecCard(s.recommendation, s.summary);
+          } else {
+            answerEl.innerHTML = `<div class="ms-ai-result"><div class="ms-ai-label">AI Answer</div><div class="ms-ai-text">${escapeHtml(s.answer || s.summary || "")}</div></div>`;
+          }
         } else {
           answerEl.innerHTML = `<div class="ms-ai-result"><div class="ms-ai-label">AI Answer</div><div class="ms-ai-text">${escapeHtml(data.answer)}</div></div>`;
         }

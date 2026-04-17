@@ -2166,6 +2166,13 @@ body.modal-open { overflow: hidden; }
 .ms-decision-label-green { color: #0a7a5a; }
 .ms-decision-label-amber { color: #b45309; }
 .ms-decision-section ul { list-style: disc; padding-left: 1.25rem; margin: 0; font-size: 0.85rem; line-height: 1.6; color: var(--text); }
+.ms-decision-info {
+  font-size: 0.85rem;
+  line-height: 1.6;
+  color: var(--text);
+  white-space: pre-wrap;
+}
+
 .ms-decision-summary {
   margin-top: 1rem;
   padding-top: 0.75rem;
