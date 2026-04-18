@@ -389,6 +389,21 @@ function renderResults(data) {
     winnerSaveBtn.onclick = () => saveSupplier(winner, winnerSaveBtn);
   }
 
+  // Winner AI Insight (on-demand)
+  const winnerInsight = document.getElementById("winner-ai-insight");
+  if (winnerInsight) {
+    winnerInsight.open = false;
+    const container = winnerInsight.querySelector(".ai-insight-container");
+    container.innerHTML = "";
+    let winnerInsightLoaded = false;
+    winnerInsight.ontoggle = () => {
+      if (winnerInsight.open && !winnerInsightLoaded) {
+        winnerInsightLoaded = true;
+        fetchInsight(winner.name, container);
+      }
+    };
+  }
+
   // Top 3 cards
   const top3Container = document.getElementById("top3-cards");
   top3Container.innerHTML = "";
@@ -448,7 +463,7 @@ function renderResults(data) {
       <td><a href="${s.url}" target="_blank" rel="noopener" style="font-size:12px" onclick="event.stopPropagation()">${new URL(s.url).hostname}</a></td>
       <td class="row-actions-cell"><div class="row-actions-inner">
         <span class="row-details-btn" data-action="details"><span class="row-details-btn-text">View</span><span class="row-details-btn-chevron">▸</span></span>
-        <button class="row-insight-btn" data-action="insight" onclick="event.stopPropagation()">Insight</button>
+        <button class="row-insight-btn" data-action="insight" onclick="event.stopPropagation()">AI Insight</button>
         <button class="save-btn save-btn-row" data-action="save" data-supplier-name="${escapeHtml(s.name)}" data-supplier-url="${escapeHtml(s.url)}" onclick="event.stopPropagation()">Save</button>
       </div></td>
     `;
