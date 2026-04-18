@@ -18,13 +18,13 @@ async function syncSavedButtonStates() {
     document.querySelectorAll(".save-btn").forEach(btn => {
       const key = `${btn.dataset.supplierName || ""}|${btn.dataset.supplierUrl || ""}`;
       const isSaved = savedKeys.has(key);
+      const isRow = btn.classList.contains("save-btn-row");
       if (isSaved) {
-        btn.textContent = btn.classList.contains("save-btn-row") ? "Saved" : "Saved";
+        btn.textContent = "Saved";
         btn.disabled = true;
         btn.classList.add("saved");
       } else {
-        btn.textContent = btn.classList.contains("save-btn-row") ? "Save"
-          : btn.id === "winner-save-btn" ? "Save to My Suppliers" : "Save to My Suppliers";
+        btn.textContent = isRow ? "Save" : "Save to My Suppliers";
         btn.disabled = false;
         btn.classList.remove("saved");
       }
@@ -70,6 +70,7 @@ window.addEventListener("pageshow", (e) => {
 });
 
 async function saveSupplier(supplier, btnEl) {
+  const isRow = btnEl.classList.contains("save-btn-row");
   btnEl.disabled = true;
   btnEl.textContent = "Saving...";
   try {
@@ -445,11 +446,11 @@ function renderResults(data) {
       <td class="${riskClass(s.risk_level)}">${s.risk_level}</td>
       <td>${valueScoreHTML(s)}</td>
       <td><a href="${s.url}" target="_blank" rel="noopener" style="font-size:12px" onclick="event.stopPropagation()">${new URL(s.url).hostname}</a></td>
-      <td class="row-actions-cell">
+      <td class="row-actions-cell"><div class="row-actions-inner">
         <span class="row-details-btn" data-action="details"><span class="row-details-btn-text">View</span><span class="row-details-btn-chevron">▸</span></span>
-        <button class="row-insight-btn" data-action="insight" onclick="event.stopPropagation()">🔍 AI Insight</button>
+        <button class="row-insight-btn" data-action="insight" onclick="event.stopPropagation()">Insight</button>
         <button class="save-btn save-btn-row" data-action="save" data-supplier-name="${escapeHtml(s.name)}" data-supplier-url="${escapeHtml(s.url)}" onclick="event.stopPropagation()">Save</button>
-      </td>
+      </div></td>
     `;
     tbody.appendChild(tr);
 

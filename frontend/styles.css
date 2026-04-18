@@ -1020,7 +1020,16 @@ body.analysis-mode .back-link { display: inline-flex; align-items: center; }
 .risk-high   { color: var(--red); }
 
 /* ===== TABLE ===== */
-.table-wrapper { overflow-x: auto; border-radius: 14px; border: 1px solid var(--border); background: var(--card-bg); }
+.table-wrapper {
+  overflow: hidden;
+  width: 100%;
+  max-width: 100%;
+  box-sizing: border-box;
+  border-radius: 0 0 14px 14px;
+  border: 1px solid var(--border);
+  background: var(--card-bg);
+}
+.supplier-table { min-width: 0; }
 .supplier-table { width: 100%; border-collapse: collapse; font-size: 0.88rem; }
 .supplier-table th {
   text-align: left;
@@ -1029,13 +1038,13 @@ body.analysis-mode .back-link { display: inline-flex; align-items: center; }
   text-transform: uppercase;
   letter-spacing: 0.08em;
   color: var(--text);
-  padding: 1rem 1.25rem;
+  padding: 1rem 0.7rem;
   background: var(--accent-dim);
   border-bottom: 1px solid var(--border);
   white-space: nowrap;
 }
 .supplier-table td {
-  padding: 0.85rem 1.25rem;
+  padding: 0.85rem 0.7rem;
   border-bottom: 1px solid var(--border);
   vertical-align: middle;
   color: var(--muted);
@@ -1063,8 +1072,8 @@ body.analysis-mode .back-link { display: inline-flex; align-items: center; }
 .row-details-btn {
   display: inline-flex;
   align-items: center;
-  gap: 6px;
-  padding: 4px 10px;
+  gap: 4px;
+  padding: 3px 8px;
   font-size: 11px;
   font-weight: 600;
   letter-spacing: 0.04em;
@@ -1762,15 +1771,48 @@ body.modal-open { overflow: hidden; }
 
 /* ===== ROW ACTIONS (View + AI Insight side by side) ===== */
 .row-actions-cell {
+  vertical-align: middle;
+}
+.row-actions-inner {
   display: flex;
   align-items: center;
+  flex-wrap: wrap;
+  justify-content: flex-end;
   gap: 6px;
+}
+
+/* Keep SUPPLIER column from breaking every word on narrow screens */
+.supplier-table th:nth-child(2),
+.supplier-table td:nth-child(2) {
+  min-width: 140px;
+  word-break: normal;
+  overflow-wrap: normal;
+}
+
+/* Truncate long URLs with ellipsis instead of stretching the column */
+.supplier-table th:nth-child(7),
+.supplier-table td:nth-child(7) {
+  max-width: 110px;
+}
+
+/* Reserve enough width for DETAILS column (View + Insight + Save) */
+.supplier-table th:nth-child(8),
+.supplier-table td:nth-child(8) {
+  min-width: 155px;
+}
+.supplier-table td:nth-child(7) a {
+  display: inline-block;
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  vertical-align: middle;
 }
 .row-insight-btn {
   display: inline-flex;
   align-items: center;
   gap: 3px;
-  padding: 0.3rem 0.65rem;
+  padding: 0.2rem 0.45rem;
   font-size: 0.7rem;
   font-weight: 600;
   color: var(--accent);
@@ -2000,7 +2042,7 @@ body.modal-open { overflow: hidden; }
 .save-btn:disabled { opacity: 0.7; cursor: default; transform: none; }
 .save-btn-card { padding: 0.35rem 0.9rem; font-size: 0.75rem; }
 .save-btn-row {
-  padding: 0.25rem 0.6rem;
+  padding: 0.2rem 0.45rem;
   font-size: 0.7rem;
   margin-top: 0;
   white-space: nowrap;
