@@ -583,8 +583,13 @@ function finalize(data, error) {
 // ---------------------------------------------------------------------------
 
 (function _init() {
-  // Restore last analysis result if cached
-  restoreCachedAnalysis();
+  // Show "View Last Analysis Result" button if we have a cache (but don't auto-restore)
+  const prevBtn = document.getElementById("previous-analysis-btn");
+  if (prevBtn) {
+    try {
+      prevBtn.style.display = localStorage.getItem("metalmind_last_analysis") ? "" : "none";
+    } catch (_) {}
+  }
 
   // Wire priority pills
   const pills = document.querySelectorAll(".priority-pill");
