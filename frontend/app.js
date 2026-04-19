@@ -43,11 +43,11 @@ function restoreCachedAnalysis() {
     }
   } catch (_) {}
   try {
-    const cached = sessionStorage.getItem("metalmind_last_analysis");
+    const cached = localStorage.getItem("metalmind_last_analysis");
     if (!cached) return false;
-    const data = JSON.parse(cached);
-    if (!data || !data.winner) return false;
-    renderResults(data);
+    const parsed = JSON.parse(cached);
+    if (!parsed || parsed.version !== 1 || !parsed.data || !parsed.data.winner) return false;
+    renderResults(parsed.data);
     showResults();
     return true;
   } catch (_) { return false; }
@@ -133,7 +133,7 @@ function showIdle() {
   const prevBtn = document.getElementById("previous-analysis-btn");
   if (prevBtn) {
     try {
-      prevBtn.style.display = sessionStorage.getItem("metalmind_last_analysis") ? "" : "none";
+      prevBtn.style.display = localStorage.getItem("metalmind_last_analysis") ? "" : "none";
     } catch (_) { prevBtn.style.display = "none"; }
   }
 }
@@ -570,7 +570,8 @@ function finalize(data, error) {
   }
 
   // Cache the result so Back-to-Analysis-Result restores it without re-running
-  try { sessionStorage.setItem("metalmind_last_analysis", JSON.stringify(data)); } catch (_) {}
+  // Use localStorage so cache survives browser close/reopen (saves API cost)
+  try { localStorage.setItem("metalmind_last_analysis", JSON.stringify({ version: 1, data: data })); } catch (_) {}
 
   renderResults(data);
   showResults();
