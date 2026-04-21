@@ -5,53 +5,22 @@ Ranking and Top 3 selection module.
 
 Rules (from system/workflow.md, rules/supplier_rules.md):
 - Rank all suppliers by value_score descending
-- Ensure at least 1 India supplier in Top 3 (India is priority)
 - Return exactly Top 3 for recommendation
 - Never select based on price alone — value_score already encodes risk
+- No country preference: Top 3 is strictly the highest value_scores. The
+  "Risk > Price" principle is already encoded in value_score, so forcing
+  a particular country into Top 3 would mean promoting a lower-value
+  supplier, which contradicts that principle.
 """
 
 from modules.value_scorer import ValuedSupplier
-from modules.risk_scorer  import RiskLevel
 
 
-def rank_suppliers(
-    valued_suppliers: list[ValuedSupplier],
-    priority: str = "India",
-) -> list[ValuedSupplier]:
-    """
-    Sort suppliers by value_score descending.
-
-    Args:
-        valued_suppliers: Output of compute_value_scores()
-        priority: "India" | "Both Equal" | "China"
-                  When scores are close, the priority country is favoured.
-                  "India"      — guarantee at least 1 India in Top 3
-                  "China"      — guarantee at least 1 China in Top 3
-                  "Both Equal" — pure value_score order, no country boost
-    """
+def rank_suppliers(valued_suppliers: list[ValuedSupplier]) -> list[ValuedSupplier]:
+    """Sort suppliers by value_score descending."""
     if not valued_suppliers:
         return []
-
-    # Primary sort: value_score descending
-    ranked = sorted(valued_suppliers, key=lambda v: v.value_score, reverse=True)
-
-    if priority == "Both Equal":
-        return ranked
-
-    # Determine which country to guarantee in Top 3
-    preferred = "India" if priority == "India" else "China"
-
-    top3_countries = {v.scored.record.country for v in ranked[:3]}
-    if preferred not in top3_countries:
-        best_preferred = next(
-            (v for v in ranked[3:] if v.scored.record.country == preferred),
-            None,
-        )
-        if best_preferred:
-            ranked.remove(best_preferred)
-            ranked.insert(2, best_preferred)
-
-    return ranked
+    return sorted(valued_suppliers, key=lambda v: v.value_score, reverse=True)
 
 
 def get_top3(ranked: list[ValuedSupplier]) -> list[ValuedSupplier]:

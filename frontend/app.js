@@ -14,19 +14,22 @@ async function syncSavedButtonStates() {
     const resp = await fetch("/api/saved-suppliers");
     if (!resp.ok) return;
     const saved = await resp.json();
-    const savedKeys = new Set(saved.map(s => `${s.supplier_name}|${s.url || ""}`));
+    // Key → DB id so the button can issue DELETE when toggled off.
+    const savedMap = new Map(saved.map(s => [`${s.supplier_name}|${s.url || ""}`, s.id]));
     document.querySelectorAll(".save-btn").forEach(btn => {
       const key = `${btn.dataset.supplierName || ""}|${btn.dataset.supplierUrl || ""}`;
-      const isSaved = savedKeys.has(key);
+      const id  = savedMap.get(key);
       const isRow = btn.classList.contains("save-btn-row");
-      if (isSaved) {
-        btn.textContent = "Saved";
-        btn.disabled = true;
+      if (id !== undefined) {
+        btn.textContent = "✓ Saved";
+        btn.disabled = false;
         btn.classList.add("saved");
+        btn.dataset.supplierId = String(id);
       } else {
         btn.textContent = isRow ? "Save" : "Save to My Suppliers";
         btn.disabled = false;
         btn.classList.remove("saved");
+        delete btn.dataset.supplierId;
       }
     });
   } catch (_) {}
@@ -70,6 +73,17 @@ window.addEventListener("pageshow", (e) => {
 });
 
 async function saveSupplier(supplier, btnEl) {
+  // One-click toggle: if already saved, unsave and flip back to "Save".
+  if (btnEl.classList.contains("saved") && btnEl.dataset.supplierId) {
+    const id = btnEl.dataset.supplierId;
+    btnEl.disabled = true;
+    try {
+      await fetch(`/api/saved-supplier/${id}`, { method: "DELETE" });
+    } catch (_) {}
+    await syncSavedButtonStates();
+    return;
+  }
+
   const isRow = btnEl.classList.contains("save-btn-row");
   btnEl.disabled = true;
   btnEl.textContent = "Saving...";
@@ -273,14 +287,133 @@ function confidenceHTML(supplier) {
 // On-demand AI Insight (loaded per supplier on click)
 // ---------------------------------------------------------------------------
 
-async function fetchInsight(name, containerEl) {
+// Per-supplier cache of AI insight payloads, keyed by "name|url".
+// Lives in localStorage so it survives refreshes and server restarts —
+// the same supplier re-opened won't trigger another Gemma call until
+// the user explicitly hits "Regenerate".
+const _INSIGHT_CACHE_PREFIX = "metalmind_insight|";
+
+function _insightCacheKey(supplier) {
+  const name = (typeof supplier === "object" ? supplier?.name : supplier) || "";
+  const url  = (typeof supplier === "object" ? supplier?.url  : "")       || "";
+  return _INSIGHT_CACHE_PREFIX + name + "|" + url;
+}
+
+function _insightCacheGet(supplier) {
+  try {
+    const raw = localStorage.getItem(_insightCacheKey(supplier));
+    if (!raw) return null;
+    const parsed = JSON.parse(raw);
+    if (!parsed || !parsed.data) return null;
+    return parsed;   // {data, generatedAt}
+  } catch (_) { return null; }
+}
+
+function _insightCacheSet(supplier, data) {
+  try {
+    localStorage.setItem(_insightCacheKey(supplier), JSON.stringify({
+      data,
+      generatedAt: new Date().toISOString(),
+    }));
+  } catch (_) {}
+}
+
+function _insightCacheClear(supplier) {
+  try { localStorage.removeItem(_insightCacheKey(supplier)); } catch (_) {}
+}
+
+function _renderInsight(data, containerEl, supplier, cached, generatedAt) {
+  const section = (label, items) => {
+    if (!items || !items.length) return "";
+    return `<div class="ai-insight-section"><div class="ai-insight-label">${label}</div><ul>${items.map(s => `<li>${escapeHtml(s)}</li>`).join("")}</ul></div>`;
+  };
+
+  const topStrength = data.key_strengths?.[0];
+  const topRisk     = data.key_risks?.[0];
+  const quickLines  = [
+    topStrength ? `<div class="insight-quick-line insight-quick-pos">+ ${escapeHtml(topStrength)}</div>` : "",
+    topRisk     ? `<div class="insight-quick-line insight-quick-neg">- ${escapeHtml(topRisk)}</div>` : "",
+  ].filter(Boolean).join("");
+
+  const fullSection = [
+    section("Key Strengths", data.key_strengths),
+    section("Key Risks", data.key_risks),
+    section("Hidden Signals", data.hidden_signals),
+  ].filter(Boolean).join("");
+
+  const metaLine = cached && generatedAt
+    ? `<span class="insight-cache-note">Cached ${_fmtRelTime(generatedAt)}</span>`
+    : "";
+
+  containerEl.innerHTML = `
+    <div class="ai-insight-body">
+      <p class="ai-insight-summary">${escapeHtml(data.summary)}</p>
+      ${quickLines}
+      ${fullSection ? `<details class="insight-full"><summary class="insight-full-toggle">Show full analysis</summary>${fullSection}</details>` : ""}
+      <div class="ai-insight-foot">
+        <span class="ai-insight-conf">AI Confidence: ${(data.confidence * 100).toFixed(0)}%</span>
+        ${metaLine}
+        <button type="button" class="insight-regen-btn" title="Re-run Gemma for a fresh insight (uses API call)">↻ Regenerate</button>
+      </div>
+    </div>
+  `;
+
+  const regenBtn = containerEl.querySelector(".insight-regen-btn");
+  if (regenBtn) {
+    regenBtn.addEventListener("click", () => {
+      _insightCacheClear(supplier);
+      fetchInsight(supplier, containerEl, { forceRefresh: true });
+    });
+  }
+}
+
+function _fmtRelTime(iso) {
+  try {
+    const diffSec = (Date.now() - new Date(iso).getTime()) / 1000;
+    if (diffSec < 60)       return "just now";
+    if (diffSec < 3600)     return Math.floor(diffSec / 60) + "m ago";
+    if (diffSec < 86400)    return Math.floor(diffSec / 3600) + "h ago";
+    return Math.floor(diffSec / 86400) + "d ago";
+  } catch (_) { return "recently"; }
+}
+
+// supplier = the full SupplierOut object (not just the name).
+// Passing extra fields so the backend can reconstruct context when its
+// in-memory _last_ranked cache has been cleared (server restart, or the
+// user is viewing a restored-from-localStorage analysis).
+//
+// Cache flow:
+//   - First call → hits /api/insight, stores response in localStorage
+//   - Subsequent calls for the same supplier → served from localStorage
+//   - User clicks "↻ Regenerate" → clears cache and re-fetches
+async function fetchInsight(supplier, containerEl, opts = {}) {
+  const { forceRefresh = false } = opts;
+  const name = typeof supplier === "string" ? supplier : supplier?.name;
+
+  // Cache hit → render immediately, no API call
+  if (!forceRefresh) {
+    const cached = _insightCacheGet(supplier);
+    if (cached) {
+      _renderInsight(cached.data, containerEl, supplier, true, cached.generatedAt);
+      return;
+    }
+  }
+
   containerEl.innerHTML = '<div class="insight-loading">Loading AI insight...</div>';
+
+  const body = { name };
+  if (typeof supplier === "object" && supplier) {
+    if (supplier.country)     body.country     = supplier.country;
+    if (supplier.url)         body.url         = supplier.url;
+    if (supplier.description) body.description = supplier.description;
+    if (supplier.price_usd != null) body.price_usd = supplier.price_usd;
+  }
 
   try {
     const resp = await fetch("/api/insight", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ name }),
+      body: JSON.stringify(body),
     });
     if (!resp.ok) {
       const err = await resp.json().catch(() => ({}));
@@ -293,34 +426,8 @@ async function fetchInsight(name, containerEl) {
       return;
     }
 
-    const section = (label, items) => {
-      if (!items || !items.length) return "";
-      return `<div class="ai-insight-section"><div class="ai-insight-label">${label}</div><ul>${items.map(s => `<li>${escapeHtml(s)}</li>`).join("")}</ul></div>`;
-    };
-
-    // Quick glance: 1 strength + 1 risk (scannable in <3 seconds)
-    const topStrength = data.key_strengths?.[0];
-    const topRisk     = data.key_risks?.[0];
-    const quickLines  = [
-      topStrength ? `<div class="insight-quick-line insight-quick-pos">+ ${escapeHtml(topStrength)}</div>` : "",
-      topRisk     ? `<div class="insight-quick-line insight-quick-neg">- ${escapeHtml(topRisk)}</div>` : "",
-    ].filter(Boolean).join("");
-
-    // Full details — collapsed by default
-    const fullSection = [
-      section("Key Strengths", data.key_strengths),
-      section("Key Risks", data.key_risks),
-      section("Hidden Signals", data.hidden_signals),
-    ].filter(Boolean).join("");
-
-    containerEl.innerHTML = `
-      <div class="ai-insight-body">
-        <p class="ai-insight-summary">${escapeHtml(data.summary)}</p>
-        ${quickLines}
-        ${fullSection ? `<details class="insight-full"><summary class="insight-full-toggle">Show full analysis</summary>${fullSection}</details>` : ""}
-        <div class="ai-insight-conf">AI Confidence: ${(data.confidence * 100).toFixed(0)}%</div>
-      </div>
-    `;
+    _insightCacheSet(supplier, data);
+    _renderInsight(data, containerEl, supplier, false);
   } catch (_) {
     containerEl.innerHTML = '<div class="insight-error">Could not reach the server.</div>';
   }
@@ -399,7 +506,7 @@ function renderResults(data) {
     winnerInsight.ontoggle = () => {
       if (winnerInsight.open && !winnerInsightLoaded) {
         winnerInsightLoaded = true;
-        fetchInsight(winner.name, container);
+        fetchInsight(winner, container);
       }
     };
   }
@@ -441,7 +548,7 @@ function renderResults(data) {
     insightDetails.addEventListener("toggle", () => {
       if (insightDetails.open && !insightLoaded) {
         insightLoaded = true;
-        fetchInsight(s.name, insightDetails.querySelector(".ai-insight-container"));
+        fetchInsight(s, insightDetails.querySelector(".ai-insight-container"));
       }
     });
     top3Container.appendChild(card);
@@ -507,13 +614,19 @@ function renderResults(data) {
 
       if (!insightLoaded) {
         insightLoaded = true;
-        fetchInsight(s.name, panel);
+        fetchInsight(s, panel);
       }
 
       // Scroll the insight into view
       setTimeout(() => panel.scrollIntoView({ behavior: "smooth", block: "nearest" }), 100);
     });
   });
+
+  // After all supplier cards + rows are in the DOM, cross-check against
+  // /api/saved-suppliers so the Save buttons show the correct "✓ Saved"
+  // state. Without this, a page refresh or cache-restore would always
+  // render every button as "Save" even when the supplier is already saved.
+  syncSavedButtonStates();
 }
 
 
@@ -521,13 +634,7 @@ function renderResults(data) {
 // Main: single unified analysis
 // ---------------------------------------------------------------------------
 
-function _currentPriority() {
-  const active = document.querySelector(".priority-pill.is-active");
-  return active ? active.dataset.value : "Both Equal";
-}
-
 async function runAnalysis() {
-  const priority = _currentPriority();
   const btn = document.getElementById("run-btn");
   if (btn) btn.classList.add("btn-running");
 
@@ -544,7 +651,7 @@ async function runAnalysis() {
     const resp = await fetch("/api/analyze", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ max_results: 10, priority }),
+      body: JSON.stringify({ max_results: 10 }),
     });
     if (!resp.ok) {
       const err = await resp.json().catch(() => ({}));
@@ -591,15 +698,18 @@ function finalize(data, error) {
     } catch (_) {}
   }
 
-  // Wire priority pills
-  const pills = document.querySelectorAll(".priority-pill");
-  pills.forEach(pill => {
-    pill.addEventListener("click", () => {
-      pills.forEach(p => { p.classList.remove("is-active"); p.setAttribute("aria-checked", "false"); });
-      pill.classList.add("is-active");
-      pill.setAttribute("aria-checked", "true");
-    });
-  });
+  // ?restore=1 — coming back from My Suppliers or a saved-supplier page.
+  // Skip the idle UI and drop the user straight back on the last analysis
+  // result. Uses the same cache reader as the "View Last Analysis" button.
+  try {
+    const params = new URLSearchParams(window.location.search);
+    if (params.get("restore") === "1") {
+      const ok = restoreCachedAnalysis();
+      // Clean the URL so a refresh later doesn't keep auto-restoring if
+      // the cache is intentionally cleared.
+      if (ok) history.replaceState({}, "", window.location.pathname);
+    }
+  } catch (_) {}
 
   // Wire principle modal
   const badge   = document.getElementById("principle-badge");

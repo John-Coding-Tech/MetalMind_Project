@@ -14,6 +14,7 @@
       <span class="nav-logo-name">Metal<span>Mind</span> AI</span>
     </a>
     <div class="nav-links">
+      <a href="https://phykawing.github.io/MetalMind-FrontEnd/">Home</a>
       <a href="https://phykawing.github.io/MetalMind-FrontEnd/#problem">Problem</a>
       <a href="https://phykawing.github.io/MetalMind-FrontEnd/#solution">Solution</a>
       <a href="https://phykawing.github.io/MetalMind-FrontEnd/#demo">Demo</a>
@@ -27,7 +28,10 @@
     <main class="main-content">
       <div class="main-inner ms-page">
 
-        <a href="javascript:history.back()" class="ms-back-link">← Back to Analysis Result</a>
+        <!-- Go to "/?restore=1" — the ?restore flag tells app.js _init to
+             immediately re-render the last analysis from localStorage
+             rather than drop the user on the idle page. -->
+        <a href="/?restore=1" class="ms-back-link">← Back to Analysis Result</a>
 
         <div class="ms-header">
           <h1 class="ms-title">My Suppliers</h1>
@@ -47,7 +51,6 @@
           <div class="ms-suggestions" id="ai-suggestions">
             <button class="ms-suggestion" onclick="useSuggestion(this)">Which supplier has the lowest risk?</button>
             <button class="ms-suggestion" onclick="useSuggestion(this)">Best value under $10?</button>
-            <button class="ms-suggestion" onclick="useSuggestion(this)">Compare India vs China</button>
             <button class="ms-suggestion" onclick="useSuggestion(this)">Recommend the safest option</button>
           </div>
           <div id="ai-scope-hint" class="ms-scope-hint" style="display:none;"></div>
@@ -67,7 +70,7 @@
           <div class="ms-empty-icon">📋</div>
           <p>No suppliers saved yet.</p>
           <p class="ms-empty-hint">Run an analysis and click "Save" on any supplier to add it here.</p>
-          <a href="/" class="run-btn" style="margin-top:0.5rem;"><span class="run-btn-text">Back to Analysis Result</span><span class="run-btn-arrow">&rarr;</span></a>
+          <a href="/?restore=1" class="run-btn" style="margin-top:0.5rem;"><span class="run-btn-text">Back to Analysis Result</span><span class="run-btn-arrow">&rarr;</span></a>
         </div>
 
         <!-- Filters + Sort -->
@@ -121,6 +124,66 @@
   <script>
     function escapeHtml(s) {
       return String(s).replace(/&/g,"&amp;").replace(/</g,"&lt;").replace(/>/g,"&gt;").replace(/"/g,"&quot;");
+    }
+
+    // AI source-tag → pill chip. Runs after escapeHtml so it's XSS-safe.
+    // Tags emitted by the backend prompt: [user-verified] [attachment]
+    // [web-fetch] [web-search] [rule-based] [AI-analysis]
+    // Map of every recognised source-tag string → CSS chip class.
+    // The key is what the AI writes inside brackets; the class is purely
+    // presentational so we can keep a short internal name.
+    const _SOURCE_TAG_CLASSES = {
+      "user-verified":  "src-user-verified",
+      "attachment":     "src-attachment",
+      "web-fetch":      "src-web-fetch",
+      "web-search":     "src-web-search",
+      "AI Deep Report": "src-deep-research",
+      "rule-based":     "src-rule-based",
+      "AI-analysis":    "src-ai-analysis",
+    };
+    // Turn bare http(s) URLs in AI-generated text into clickable links.
+    // Runs AFTER escapeHtml, so the string is already XSS-safe — we just
+    // wrap the URL substring. Trailing sentence punctuation (.,;:!?) and
+    // unmatched trailing parens/brackets are kept OUTSIDE the link so the
+    // surrounding sentence reads naturally.
+    function _linkifyUrls(html) {
+      return html.replace(/(https?:\/\/[^\s<>"'「」\u3001\u3002\uff0c\uff1b\uff1a]+)/g, (url) => {
+        let trimmed = url;
+        let trailing = "";
+        while (trimmed.length) {
+          const last = trimmed[trimmed.length - 1];
+          if (/[.,;:!?]/.test(last)) {
+            trailing = last + trailing;
+            trimmed = trimmed.slice(0, -1);
+            continue;
+          }
+          if (last === ")" || last === "]" || last === "}") {
+            const open = last === ")" ? "(" : last === "]" ? "[" : "{";
+            const opens  = [...trimmed].filter(c => c === open ).length;
+            const closes = [...trimmed].filter(c => c === last ).length;
+            if (closes > opens) {
+              trailing = last + trailing;
+              trimmed  = trimmed.slice(0, -1);
+              continue;
+            }
+          }
+          break;
+        }
+        return `<a href="${trimmed}" target="_blank" rel="noopener" class="ms-chat-link">${trimmed}</a>${trailing}`;
+      });
+    }
+
+    function renderWithSourceTags(text) {
+      let html = escapeHtml(text);
+      // Source tags → coloured chips
+      html = html.replace(
+        /\[(user-verified|attachment|web-fetch|web-search|AI Deep Report|rule-based|AI-analysis)\]/g,
+        (_m, tag) => `<span class="src-chip ${_SOURCE_TAG_CLASSES[tag]}">${tag}</span>`
+      );
+      // Bare URLs → clickable anchors (after chip replacement; URLs don't
+      // appear inside tag names so the two passes don't interact)
+      html = _linkifyUrls(html);
+      return html;
     }
 
     let _suppliers = [];
@@ -178,6 +241,21 @@
       renderList();
     }
 
+    // Choose the best price to display in list/compare views.
+    // User-entered `quoted_price` (from Edit Details) wins over the regex-
+    // extracted `price_display` so that actual quotes — not search-snippet
+    // guesses — are what the user sees on their overview.
+    const _PRICE_SYMBOL = { USD: "$", AUD: "A$", INR: "₹", CNY: "¥", EUR: "€" };
+    function _displayPrice(s) {
+      if (s.quoted_price != null && s.quoted_price !== "") {
+        const curr = (s.quoted_currency || "USD").toUpperCase();
+        const unit = s.quoted_unit || "sqm";
+        const sym  = _PRICE_SYMBOL[curr] || (curr + " ");
+        return { text: `${sym}${s.quoted_price}/${unit}`, verified: true };
+      }
+      return { text: s.price_display || "—", verified: false };
+    }
+
     function renderList() {
       const filtered = getFiltered();
       const bestId = getBestId();
@@ -220,21 +298,22 @@
               </div>
             </div>
             <div class="ms-card-stats">
-              <div class="ms-stat"><div class="ms-stat-label">Price</div><div class="ms-stat-value">${escapeHtml(s.price_display || "—")}</div></div>
+              ${(() => {
+                const p = _displayPrice(s);
+                return `<div class="ms-stat">
+                  <div class="ms-stat-label">Price ${p.verified ? '<span class="ms-price-verified" title="From user-entered quote">✓</span>' : ''}</div>
+                  <div class="ms-stat-value">${escapeHtml(p.text)}</div>
+                </div>`;
+              })()}
               <div class="ms-stat"><div class="ms-stat-label">Value</div><div class="ms-stat-value ms-stat-accent">${s.value_score != null ? s.value_score + "/100" : "—"}</div></div>
               <div class="ms-stat"><div class="ms-stat-label">Risk Score</div><div class="ms-stat-value">${s.risk_score != null ? (s.risk_score * 100).toFixed(0) + "%" : "—"}</div></div>
             </div>
-          </div>
-          <div class="ms-card-notes-row">
-            <input type="text" class="ms-notes-input" placeholder="Add a note..."
-              value="${escapeHtml(s.notes || "")}"
-              onblur="saveNote(${s.id}, this.value)"
-              onkeydown="if(event.key==='Enter'){this.blur();}" />
           </div>
           <div class="ms-card-bottom">
             ${s.url ? `<a href="${escapeHtml(s.url)}" target="_blank" rel="noopener" class="ms-card-url">${escapeHtml(s.url)}</a>` : "<span></span>"}
             <div class="ms-card-actions">
               <span class="ms-card-date">Saved ${new Date(s.saved_at).toLocaleDateString()}</span>
+              <a class="ms-details-btn" href="/supplier/${s.id}/edit">${hasAssessment(s) ? "✏️ Edit Details" : "➕ Add Details"}</a>
               <button class="ms-report-btn" onclick="openReport(${s.id})">📊 AI Deep Report</button>
               <button class="ms-delete-btn" onclick="deleteSupplier(${s.id})"><span class="ms-delete-icon">🗑</span> Remove</button>
             </div>
@@ -243,18 +322,14 @@
       }).join("");
     }
 
-    // ── Notes ──
-    async function saveNote(id, text) {
-      const s = _suppliers.find(s => s.id === id);
-      if (!s || s.notes === text) return;
-      try {
-        const resp = await fetch(`/api/saved-supplier/${id}/notes`, {
-          method: "PATCH",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ notes: text }),
-        });
-        if (resp.ok) { const updated = await resp.json(); s.notes = updated.notes; }
-      } catch (_) {}
+    // ── Assessment presence (for button label) ──
+    function hasAssessment(s) {
+      return !!(s.decision_stage || s.rating || s.notes ||
+                (s.tags && s.tags.length) ||
+                (s.pros && s.pros.length) || (s.cons && s.cons.length) ||
+                s.quoted_price != null || s.moq != null ||
+                s.lead_time_days != null || s.sample_status ||
+                s.payment_terms);
     }
 
     // ── Delete ──
@@ -308,7 +383,13 @@
         return `<div class="ms-cmp-col">
           <div class="ms-cmp-name">${escapeHtml(s.supplier_name)}</div>
           <div class="ms-cmp-country">${escapeHtml(s.country || "")}</div>
-          <div class="ms-cmp-row"><span>Price</span><strong>${escapeHtml(s.price_display || "—")}</strong></div>
+          ${(() => {
+            const p = _displayPrice(s);
+            return `<div class="ms-cmp-row">
+              <span>Price ${p.verified ? '<span class="ms-price-verified" title="From user-entered quote">✓</span>' : ''}</span>
+              <strong>${escapeHtml(p.text)}</strong>
+            </div>`;
+          })()}
           <div class="ms-cmp-row"><span>Value Score</span><strong>${s.value_score != null ? s.value_score + "/100" : "—"}</strong></div>
           <div class="ms-cmp-row"><span>Risk</span><strong class="${riskCls}">${escapeHtml(s.risk_level || "—")}</strong></div>
           <div class="ms-cmp-row"><span>Risk Score</span><strong>${s.risk_score != null ? (s.risk_score * 100).toFixed(0) + "%" : "—"}</strong></div>
@@ -330,6 +411,66 @@
       doAiSearch();
     }
 
+    // ── Structured-response helpers (module-scope so renderChat can use them) ──
+    function toInfoText(info) {
+      if (!info) return "";
+      if (typeof info === "string") return info;
+      if (Array.isArray(info)) return info.map(toInfoText).join("\n");
+      if (typeof info === "object") {
+        return Object.entries(info).map(([k, v]) => {
+          const label = String(k).replace(/_/g, " ");
+          if (typeof v === "object") return `${label}:\n${toInfoText(v).split("\n").map(l => "  " + l).join("\n")}`;
+          return `${label}: ${v}`;
+        }).join("\n");
+      }
+      return String(info);
+    }
+
+    function renderRecCard(rec, summary, extraInfo) {
+      const reasons = (rec.reasons || []).map(r => `<li>${renderWithSourceTags(r)}</li>`).join("");
+      const tradeoffs = (rec.tradeoffs || []).map(t => `<li>${renderWithSourceTags(t)}</li>`).join("");
+      const infoText = toInfoText(extraInfo);
+      return `
+        <div class="ms-decision-card">
+          <div class="ms-decision-rec">
+            <div class="ms-decision-badge">Recommended</div>
+            <div class="ms-decision-name">${escapeHtml(rec.supplier_name || "—")}</div>
+            <div class="ms-decision-country">${escapeHtml(rec.country || "")}</div>
+          </div>
+          <div class="ms-decision-body">
+            <div class="ms-decision-section">
+              <div class="ms-decision-label ms-decision-label-green">Why</div>
+              <ul>${reasons || "<li>No specific reasons given.</li>"}</ul>
+            </div>
+            ${tradeoffs ? `<div class="ms-decision-section">
+              <div class="ms-decision-label ms-decision-label-amber">Trade-offs</div>
+              <ul>${tradeoffs}</ul>
+            </div>` : ""}
+            ${infoText ? `<div class="ms-decision-section">
+              <div class="ms-decision-label ms-decision-label-green">Details</div>
+              <div class="ms-decision-info">${renderWithSourceTags(infoText)}</div>
+            </div>` : ""}
+            ${summary ? `<div class="ms-decision-summary">${renderWithSourceTags(summary)}</div>` : ""}
+          </div>
+        </div>`;
+    }
+
+    // Renders one assistant turn (full rich card / info block). Returns HTML string.
+    function renderAssistantBlock(structured, rawAnswer) {
+      if (structured) {
+        const s = structured;
+        if (s.type === "mixed" && s.recommendation) {
+          return renderRecCard(s.recommendation, s.summary, s.info);
+        }
+        if (s.type === "recommendation" && s.recommendation) {
+          return renderRecCard(s.recommendation, s.summary);
+        }
+        const ans = toInfoText(s.answer || s.summary || "");
+        return `<div class="ms-ai-result"><div class="ms-ai-label">AI Answer</div><div class="ms-ai-text">${renderWithSourceTags(ans)}</div></div>`;
+      }
+      return `<div class="ms-ai-result"><div class="ms-ai-label">AI Answer</div><div class="ms-ai-text">${renderWithSourceTags(rawAnswer || "")}</div></div>`;
+    }
+
     function renderChat() {
       const chatEl = document.getElementById("ai-chat");
       const clearBtn = document.getElementById("clear-chat-btn");
@@ -340,12 +481,53 @@
       }
       chatEl.style.display = "";
       clearBtn.style.display = "";
-      chatEl.innerHTML = _chatHistory.map(t => {
-        if (t.role === "user") {
-          return `<div class="ms-chat-user"><span class="ms-chat-role">You</span><div class="ms-chat-msg">${escapeHtml(t.content)}</div></div>`;
+
+      // Find the index of the last assistant turn — the pair that contains
+      // it is the one we auto-expand; older pairs stay folded under their
+      // question bubble.
+      let lastAssistantIdx = -1;
+      for (let i = _chatHistory.length - 1; i >= 0; i--) {
+        if (_chatHistory[i].role === "assistant") { lastAssistantIdx = i; break; }
+      }
+
+      // Walk the history pairing each user turn with the following assistant
+      // turn. Each pair renders as ONE <details> whose <summary> IS the
+      // You bubble — clicking the question toggles its answer.
+      const parts = [];
+      let i = 0;
+      while (i < _chatHistory.length) {
+        const t = _chatHistory[i];
+        if (t.role !== "user") { i++; continue; }  // orphan assistant — skip
+
+        const nextIdx = i + 1;
+        const next    = _chatHistory[nextIdx];
+        const hasAnswer = next && next.role === "assistant";
+
+        if (hasAnswer) {
+          const isLatest = (nextIdx === lastAssistantIdx);
+          const openAttr = isLatest ? " open" : "";
+          parts.push(
+            `<details class="ms-chat-pair"${openAttr}>
+               <summary class="ms-chat-pair-summary">
+                 <span class="ms-chat-role">You</span>
+                 <div class="ms-chat-msg">${escapeHtml(t.content)}</div>
+               </summary>
+               <div class="ms-chat-pair-body">${renderAssistantBlock(next.structured, next.rawAnswer)}</div>
+             </details>`
+          );
+          i += 2;
+        } else {
+          // User turn that hasn't been answered yet (in-flight request)
+          parts.push(
+            `<div class="ms-chat-user">
+               <span class="ms-chat-role">You</span>
+               <div class="ms-chat-msg">${escapeHtml(t.content)}</div>
+             </div>`
+          );
+          i += 1;
         }
-        return ""; // Assistant messages render via answerEl
-      }).filter(Boolean).join("");
+      }
+      chatEl.innerHTML = parts.join("");
     }
 
     function clearChat() {
@@ -375,77 +557,41 @@
 
       try {
         const selected_ids = _compareSet.size > 0 ? [..._compareSet] : null;
+        // Only send text role+content to the backend as history; don't
+        // serialize the full structured JSON back to Gemma every turn.
+        const historyForApi = _chatHistory
+          .slice(0, -1)
+          .map(t => ({ role: t.role, content: t.content }));
+
         const resp = await fetch("/api/ai-search", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ query, selected_ids, history: _chatHistory.slice(0, -1) }),
+          body: JSON.stringify({ query, selected_ids, history: historyForApi }),
         });
         const data = await resp.json();
-        // Store the assistant response as plain-text summary for history
+
+        // Store this assistant turn with the FULL structured payload so
+        // renderChat can re-render the rich card for each past answer,
+        // not just the latest one.
         const assistantText = (data.structured?.summary) || data.structured?.answer || data.answer || "";
-        _chatHistory.push({ role: "assistant", content: String(assistantText).slice(0, 500) });
+        _chatHistory.push({
+          role:       "assistant",
+          content:    String(assistantText).slice(0, 500),   // for prompt history
+          structured: data.structured || null,                 // for rendering
+          rawAnswer:  data.answer || "",                       // fallback
+        });
 
-        if (data.structured) {
-          const s = data.structured;
-          _highlights = s.highlights || [];
+        _highlights = data.structured?.highlights || [];
 
-          const toInfoText = (info) => {
-            if (!info) return "";
-            if (typeof info === "string") return info;
-            if (Array.isArray(info)) return info.map(toInfoText).join("\n");
-            if (typeof info === "object") {
-              return Object.entries(info).map(([k, v]) => {
-                const label = String(k).replace(/_/g, " ");
-                if (typeof v === "object") return `${label}:\n${toInfoText(v).split("\n").map(l => "  " + l).join("\n")}`;
-                return `${label}: ${v}`;
-              }).join("\n");
-            }
-            return String(info);
-          };
-          const renderRecCard = (rec, summary, extraInfo) => {
-            const reasons = (rec.reasons || []).map(r => `<li>${escapeHtml(r)}</li>`).join("");
-            const tradeoffs = (rec.tradeoffs || []).map(t => `<li>${escapeHtml(t)}</li>`).join("");
-            const infoText = toInfoText(extraInfo);
-            return `
-              <div class="ms-decision-card">
-                <div class="ms-decision-rec">
-                  <div class="ms-decision-badge">Recommended</div>
-                  <div class="ms-decision-name">${escapeHtml(rec.supplier_name || "—")}</div>
-                  <div class="ms-decision-country">${escapeHtml(rec.country || "")}</div>
-                </div>
-                <div class="ms-decision-body">
-                  <div class="ms-decision-section">
-                    <div class="ms-decision-label ms-decision-label-green">Why</div>
-                    <ul>${reasons || "<li>No specific reasons given.</li>"}</ul>
-                  </div>
-                  ${tradeoffs ? `<div class="ms-decision-section">
-                    <div class="ms-decision-label ms-decision-label-amber">Trade-offs</div>
-                    <ul>${tradeoffs}</ul>
-                  </div>` : ""}
-                  ${infoText ? `<div class="ms-decision-section">
-                    <div class="ms-decision-label ms-decision-label-green">Details</div>
-                    <div class="ms-decision-info">${escapeHtml(infoText)}</div>
-                  </div>` : ""}
-                  ${summary ? `<div class="ms-decision-summary">${escapeHtml(summary)}</div>` : ""}
-                </div>
-              </div>`;
-          };
-
-          if (s.type === "mixed" && s.recommendation) {
-            answerEl.innerHTML = renderRecCard(s.recommendation, s.summary, s.info);
-          } else if (s.type === "recommendation" && s.recommendation) {
-            answerEl.innerHTML = renderRecCard(s.recommendation, s.summary);
-          } else {
-            const ans = toInfoText(s.answer || s.summary || "");
-            answerEl.innerHTML = `<div class="ms-ai-result"><div class="ms-ai-label">AI Answer</div><div class="ms-ai-text">${escapeHtml(ans)}</div></div>`;
-          }
-        } else {
-          answerEl.innerHTML = `<div class="ms-ai-result"><div class="ms-ai-label">AI Answer</div><div class="ms-ai-text">${escapeHtml(data.answer)}</div></div>`;
-        }
+        // The rich card now renders inside the chat thread via renderChat(),
+        // so clear the separate answerEl (it's only for the Thinking indicator).
+        answerEl.style.display = "none";
+        answerEl.innerHTML = "";
       } catch (_) {
         answerEl.innerHTML = '<div class="ms-ai-error">Could not reach the server.</div>';
       }
       btn.classList.remove("btn-running");
+      renderChat();
       renderList();
     }
 

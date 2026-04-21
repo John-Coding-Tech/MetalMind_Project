@@ -1,0 +1,237 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Supplier Assessment — MetalMind</title>
+  <link rel="stylesheet" href="/static/styles.css" />
+</head>
+<body>
+
+  <nav class="nav">
+    <a href="/" class="nav-logo" onclick="sessionStorage.setItem('metalmind_show_idle_once','1')">
+      <img src="/static/Images/Logo.png" alt="MetalMind AI" class="nav-logo-img" />
+      <span class="nav-logo-name">Metal<span>Mind</span> AI</span>
+    </a>
+    <div class="nav-links">
+      <a href="https://phykawing.github.io/MetalMind-FrontEnd/">Home</a>
+      <a href="https://phykawing.github.io/MetalMind-FrontEnd/#problem">Problem</a>
+      <a href="https://phykawing.github.io/MetalMind-FrontEnd/#solution">Solution</a>
+      <a href="https://phykawing.github.io/MetalMind-FrontEnd/#demo">Demo</a>
+      <a href="https://phykawing.github.io/MetalMind-FrontEnd/#ebitda">Financial Impact</a>
+      <a href="https://phykawing.github.io/MetalMind-FrontEnd/#team">Team</a>
+      <a href="https://phykawing.github.io/MetalMind-FrontEnd/#contact">Contact</a>
+    </div>
+  </nav>
+
+  <div class="app-layout">
+    <main class="main-content">
+      <div class="main-inner ms-page">
+
+        <a href="/my-suppliers" class="ms-back-link">← Back to My Suppliers</a>
+
+        <div class="assess-header">
+          <div>
+            <h1 class="ms-title" id="assess-supplier-name">Loading…</h1>
+            <div class="assess-readonly-meta">
+              <span id="assess-country"></span>
+              <span id="assess-url"></span>
+            </div>
+          </div>
+          <div class="assess-save-status" id="assess-save-status">Saved ✓</div>
+        </div>
+
+        <!-- Tier 1: Quick Assessment -->
+        <section class="assess-section">
+          <h2 class="assess-section-title">Quick Assessment</h2>
+
+          <div class="assess-field">
+            <label class="assess-label">Decision Stage</label>
+            <select class="assess-select" id="decision_stage">
+              <option value="">— Not set —</option>
+              <option value="considering">Considering</option>
+              <option value="contacted">Contacted</option>
+              <option value="quoted">Quoted</option>
+              <option value="sampling">Sampling</option>
+              <option value="approved">Approved Vendor</option>
+              <option value="rejected">Rejected</option>
+              <option value="blacklisted">Blacklisted</option>
+            </select>
+          </div>
+
+          <div class="assess-field">
+            <label class="assess-label">Overall Rating</label>
+            <div class="assess-stars" id="rating-stars" data-field="rating" data-max="5"></div>
+          </div>
+
+          <div class="assess-field">
+            <label class="assess-label">Tags</label>
+            <div class="assess-chips" id="tags-chips"></div>
+            <div class="assess-chip-input-row">
+              <input type="text" class="assess-input" id="tags-input" placeholder="Add a tag and press Enter" />
+            </div>
+          </div>
+        </section>
+
+        <!-- Tier 2: Commercial Facts -->
+        <section class="assess-section">
+          <h2 class="assess-section-title">Commercial Facts</h2>
+
+          <div class="assess-grid-3">
+            <div class="assess-field">
+              <label class="assess-label">Quoted Price</label>
+              <input type="number" class="assess-input" id="quoted_price" step="0.01" placeholder="6.50" />
+            </div>
+            <div class="assess-field">
+              <label class="assess-label">Currency</label>
+              <select class="assess-select" id="quoted_currency">
+                <option value="">—</option>
+                <option value="USD">USD</option>
+                <option value="AUD">AUD</option>
+                <option value="CNY">CNY</option>
+                <option value="EUR">EUR</option>
+                <option value="INR">INR</option>
+                <option value="GBP">GBP</option>
+              </select>
+            </div>
+            <div class="assess-field">
+              <label class="assess-label">Unit</label>
+              <select class="assess-select" id="quoted_unit">
+                <option value="">—</option>
+                <option value="sqm">per sqm</option>
+                <option value="piece">per piece</option>
+                <option value="ton">per ton</option>
+                <option value="sheet">per sheet</option>
+              </select>
+            </div>
+          </div>
+
+          <div class="assess-grid-2">
+            <div class="assess-field">
+              <label class="assess-label">MOQ</label>
+              <input type="number" class="assess-input" id="moq" placeholder="500" />
+            </div>
+            <div class="assess-field">
+              <label class="assess-label">Lead Time (days)</label>
+              <input type="number" class="assess-input" id="lead_time_days" placeholder="30" />
+            </div>
+          </div>
+
+          <div class="assess-field">
+            <label class="assess-label">Payment Terms</label>
+            <input type="text" class="assess-input" id="payment_terms" placeholder="e.g. 30% T/T deposit, 70% before shipment" />
+          </div>
+
+          <div class="assess-field">
+            <label class="assess-label">Incoterms</label>
+            <select class="assess-select" id="incoterms">
+              <option value="">—</option>
+              <option value="EXW">EXW</option>
+              <option value="FOB">FOB</option>
+              <option value="CIF">CIF</option>
+              <option value="DDP">DDP</option>
+              <option value="DAP">DAP</option>
+            </select>
+          </div>
+        </section>
+
+        <!-- Tier 3: Trust & Product Verification -->
+        <section class="assess-section">
+          <h2 class="assess-section-title">Trust &amp; Product Verification</h2>
+
+          <div class="assess-grid-2">
+            <div class="assess-field">
+              <label class="assess-label">Sample Status</label>
+              <select class="assess-select" id="sample_status">
+                <option value="">—</option>
+                <option value="not_requested">Not requested</option>
+                <option value="requested">Requested</option>
+                <option value="received">Received</option>
+              </select>
+            </div>
+            <div class="assess-field">
+              <label class="assess-label">Sample Quality</label>
+              <div class="assess-stars" id="sample-quality-stars" data-field="sample_quality" data-max="5"></div>
+            </div>
+          </div>
+
+          <div class="assess-field">
+            <label class="assess-label">Factory Verified Via</label>
+            <div class="assess-checks" id="factory-verified">
+              <label><input type="checkbox" value="video_call" /> Video call</label>
+              <label><input type="checkbox" value="site_visit" /> Site visit</label>
+              <label><input type="checkbox" value="third_party" /> Third-party audit</label>
+              <label><input type="checkbox" value="business_license" /> Business license seen</label>
+              <label><input type="checkbox" value="references" /> Customer references</label>
+            </div>
+          </div>
+
+          <div class="assess-grid-3">
+            <div class="assess-field">
+              <label class="assess-label">Reference 1</label>
+              <input type="text" class="assess-input" id="coating_confirmed" placeholder="" />
+            </div>
+            <div class="assess-field">
+              <label class="assess-label">Reference 2</label>
+              <input type="text" class="assess-input" id="core_material_confirmed" placeholder="" />
+            </div>
+            <div class="assess-field">
+              <label class="assess-label">Reference 3</label>
+              <input type="text" class="assess-input" id="fire_rating_confirmed" placeholder="" />
+            </div>
+          </div>
+
+          <div class="assess-grid-2">
+            <div class="assess-field">
+              <label class="assess-label">Warranty (years)</label>
+              <input type="number" class="assess-input" id="warranty_years" placeholder="10" />
+            </div>
+            <div class="assess-field">
+              <label class="assess-label">Next Action Date</label>
+              <input type="date" class="assess-input" id="next_action_date" />
+            </div>
+          </div>
+        </section>
+
+        <!-- Pros & Cons -->
+        <section class="assess-section">
+          <h2 class="assess-section-title">Pros &amp; Cons</h2>
+          <div class="assess-grid-2">
+            <div class="assess-field">
+              <label class="assess-label">Pros</label>
+              <div class="assess-chips" id="pros-chips"></div>
+              <input type="text" class="assess-input" id="pros-input" placeholder="Add a pro and press Enter" />
+            </div>
+            <div class="assess-field">
+              <label class="assess-label">Cons</label>
+              <div class="assess-chips" id="cons-chips"></div>
+              <input type="text" class="assess-input" id="cons-input" placeholder="Add a con and press Enter" />
+            </div>
+          </div>
+        </section>
+
+        <!-- Free-form notes -->
+        <section class="assess-section">
+          <h2 class="assess-section-title">Notes</h2>
+          <textarea class="assess-textarea" id="notes" rows="6" placeholder="Free-form notes about this supplier…"></textarea>
+        </section>
+
+        <!-- Attachments — user-uploaded files; AI will use them for future analysis -->
+        <section class="assess-section">
+          <h2 class="assess-section-title">Attachments</h2>
+          <p class="assess-help-text">Upload quotes, spec sheets, photos, or any reference files for this supplier.</p>
+          <div class="attachments-actions">
+            <button type="button" class="btn-attachment" id="add-attachment-btn">+ Add Attachment</button>
+            <input type="file" id="attachment-file-input" multiple hidden />
+            <span class="attachments-status" id="attachments-status"></span>
+          </div>
+          <ul class="attachments-list" id="attachments-list"></ul>
+        </section>
+
+      </div>
+    </main>
+  </div>
+
+  <script src="/static/supplier-assessment.js"></script>
+</body>
+</html>

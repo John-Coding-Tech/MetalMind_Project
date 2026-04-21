@@ -57,7 +57,6 @@ FRONTEND = Path(__file__).parent / "frontend"
 
 class AnalyzeRequest(BaseModel):
     max_results: int = Field(default=5, ge=1, le=20)
-    priority:    str = "Both Equal"
 
 
 class SupplierOut(BaseModel):
@@ -233,7 +232,7 @@ def analyze(req: AnalyzeRequest):
     # --- Layer 1: RULE ENGINE (decision maker) ---
     scored = score_all(all_records)
     valued = compute_value_scores(scored)
-    ranked = rank_suppliers(valued, priority=req.priority)
+    ranked = rank_suppliers(valued)
     top3   = get_top3(ranked)
     winner = get_winner(top3)
     narr   = generate_recommendation(winner, top3)
@@ -314,6 +313,14 @@ def analyze(req: AnalyzeRequest):
 
 class InsightRequest(BaseModel):
     name: str
+    # Fallback fields — used only when the in-memory _last_ranked cache has
+    # been cleared (server restart, different run) and the frontend is
+    # rendering from a localStorage snapshot. Caller sends enough to let
+    # us rebuild a minimal SupplierRecord so the insight still works.
+    country:     str | None = None
+    url:         str | None = None
+    description: str | None = None
+    price_usd:   float | None = None
 
 
 @app.post("/api/insight", response_model=InsightResponse)
@@ -322,11 +329,33 @@ def get_insight(req: InsightRequest):
         raise HTTPException(status_code=400, detail="GEMMA_API_KEY not configured.")
 
     v = _last_ranked.get(req.name)
-    if v is None:
-        raise HTTPException(status_code=404, detail=f"Supplier '{req.name}' not found. Run an analysis first.")
+    if v is not None:
+        # Happy path — rich record (includes full raw_content from the scan)
+        record = v.scored.record
+    elif req.country or req.url or req.description:
+        # Fallback — rebuild a stub SupplierRecord from what the client sent.
+        # raw_content is empty here (wasn't cached); the AI will work with
+        # less context but still produce a useful insight.
+        from modules.cleaner import SupplierRecord
+        record = SupplierRecord(
+            name=req.name,
+            country=req.country or "Unknown",
+            url=req.url or "",
+            description=req.description or "",
+            price_raw="",
+            price_est=req.price_usd,
+            relevance_score=0.0,
+            raw_content="",
+        )
+    else:
+        raise HTTPException(
+            status_code=404,
+            detail=(f"Supplier '{req.name}' not found. Run an analysis first, "
+                    f"or refresh the page to re-send supplier context."),
+        )
 
     t0 = time.time()
-    result = generate_insight(v.scored.record)
+    result = generate_insight(record)
     _log.info("[perf] /api/insight '%s' %.1fs", req.name[:30], time.time() - t0)
 
     return InsightResponse(
@@ -389,14 +418,45 @@ def health(check_serper: bool = False, check_tavily: bool = False, check_gemma: 
 # Serve frontend
 # ---------------------------------------------------------------------------
 
-app.mount("/static", StaticFiles(directory=FRONTEND), name="static")
+# HTML + JS + CSS change often during development; force browsers to
+# revalidate every response so users never see a stale UI after a deploy.
+_NO_CACHE_HEADERS = {
+    "Cache-Control": "no-cache, no-store, must-revalidate",
+    "Pragma":        "no-cache",
+    "Expires":       "0",
+}
+
+
+class NoCacheStaticFiles(StaticFiles):
+    """StaticFiles subclass that stamps every response with no-cache headers.
+
+    Prevents the "browser shows yesterday's CSS/JS after a deploy" class
+    of bug. Override is O(1) — just mutates the outgoing headers.
+    """
+    async def get_response(self, path, scope):
+        resp = await super().get_response(path, scope)
+        for k, v in _NO_CACHE_HEADERS.items():
+            resp.headers[k] = v
+        return resp
+
+
+app.mount("/static", NoCacheStaticFiles(directory=FRONTEND), name="static")
+
+
+def _no_cache_file(path: Path) -> FileResponse:
+    return FileResponse(path, headers=_NO_CACHE_HEADERS)
+
 
 @app.get("/my-suppliers")
 def serve_my_suppliers_page():
-    return FileResponse(FRONTEND / "my-suppliers.html")
+    return _no_cache_file(FRONTEND / "my-suppliers.html")
+
+@app.get("/supplier/{supplier_id}/edit")
+def serve_supplier_assessment_page(supplier_id: int):
+    return _no_cache_file(FRONTEND / "supplier-assessment.html")
 
 @app.get("/{full_path:path}")
 def serve_frontend(full_path: str):
     if f"/{full_path}".startswith("/api/"):
         raise HTTPException(status_code=404, detail="Not found")
-    return FileResponse(FRONTEND / "index.html")
+    return _no_cache_file(FRONTEND / "index.html")

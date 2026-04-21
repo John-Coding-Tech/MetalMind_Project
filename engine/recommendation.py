@@ -100,18 +100,6 @@ def _build_explanation(
                 f"but {name} offered better overall value after risk adjustment."
             )
 
-    # India priority note
-    if country == "India":
-        lines.append(
-            "India is the preferred sourcing region per supplier rules, "
-            "offering shorter lead times and potentially lower freight costs."
-        )
-    elif country == "China":
-        lines.append(
-            "Note: Although India is the preferred region, no Indian supplier "
-            "scored higher on the combined value + risk metric for this search."
-        )
-
     # Price-only warning
     lines.append(
         "\n_This recommendation is based on risk-adjusted value, not lowest price alone. "

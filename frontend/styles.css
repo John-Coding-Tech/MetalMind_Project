@@ -1980,9 +1980,40 @@ body.modal-open { overflow: hidden; }
 }
 .ai-insight-section li { margin: 2px 0; }
 .ai-insight-conf {
-  margin-top: 12px;
   font-size: 11px;
   color: var(--muted);
+}
+
+/* Footer row: confidence + "Cached Xm ago" + Regenerate button */
+.ai-insight-foot {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin-top: 12px;
+  flex-wrap: wrap;
+}
+.insight-cache-note {
+  font-size: 11px;
+  color: var(--muted);
+  opacity: 0.8;
+  font-style: italic;
+}
+.insight-regen-btn {
+  margin-left: auto;
+  padding: 3px 10px;
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--accent);
+  background: transparent;
+  border: 1px solid rgba(13, 172, 241, 0.35);
+  border-radius: 999px;
+  cursor: pointer;
+  transition: background 0.15s, border-color 0.15s;
+  font-family: inherit;
+}
+.insight-regen-btn:hover {
+  background: rgba(13, 172, 241, 0.10);
+  border-color: var(--accent);
 }
 
 /* Quick-glance lines (top strength + top risk, always visible) */
@@ -2037,7 +2068,7 @@ body.modal-open { overflow: hidden; }
   background: rgba(113,246,210,0.15);
   border-color: rgba(90,232,194,0.45);
   color: #0a7a5a;
-  cursor: default;
+  cursor: pointer;
 }
 .save-btn:disabled { opacity: 0.7; cursor: default; transform: none; }
 .save-btn-card { padding: 0.35rem 0.9rem; font-size: 0.75rem; }
@@ -2213,6 +2244,70 @@ body.modal-open { overflow: hidden; }
   color: var(--text);
   line-height: 1.55;
 }
+/* Q+A pair — one <details> per Q+A. Summary IS the You-bubble; clicking
+   the question toggles the answer below. No separate teaser row. */
+.ms-chat-pair {
+  /* No wrapper chrome; the summary + body carry their own styling. */
+}
+
+/* The summary replaces .ms-chat-user visually — same appearance as a
+   You-bubble but clickable with a chevron on the right. */
+.ms-chat-pair > summary.ms-chat-pair-summary {
+  list-style: none;
+  cursor: pointer;
+  user-select: none;
+  padding: 0.75rem 2.25rem 0.75rem 1rem;   /* extra right padding for chevron */
+  background: var(--accent-dim);
+  border: 1px solid rgba(13,172,241,0.20);
+  border-radius: 8px;
+  font-size: 0.85rem;
+  position: relative;
+  transition: border-color 0.15s;
+}
+.ms-chat-pair > summary.ms-chat-pair-summary::-webkit-details-marker { display: none; }
+.ms-chat-pair > summary.ms-chat-pair-summary::marker               { content: ""; }
+
+/* Chevron indicator on the right side of the You-bubble */
+.ms-chat-pair > summary.ms-chat-pair-summary::after {
+  content: "▸";
+  position: absolute;
+  right: 0.9rem;
+  top: 50%;
+  transform: translateY(-50%);
+  font-size: 0.75rem;
+  color: var(--accent);
+  transition: transform 0.15s ease;
+}
+.ms-chat-pair[open] > summary.ms-chat-pair-summary::after {
+  transform: translateY(-50%) rotate(90deg);
+}
+.ms-chat-pair > summary.ms-chat-pair-summary:hover {
+  border-color: var(--accent);
+}
+
+/* Expanded state — flatten bottom of the question bubble so it reads
+   like a continuous container with the answer below it. */
+.ms-chat-pair[open] > summary.ms-chat-pair-summary {
+  border-bottom-left-radius: 0;
+  border-bottom-right-radius: 0;
+  border-bottom-color: transparent;
+}
+
+.ms-chat-pair-body {
+  padding-top: 0.4rem;   /* small breathing room above the rich card */
+}
+
+/* Inline URL rendered inside an AI answer — clickable, subtle accent. */
+.ms-chat-link {
+  color: var(--accent);
+  text-decoration: underline;
+  text-decoration-color: rgba(13, 172, 241, 0.35);
+  text-underline-offset: 2px;
+  word-break: break-all;      /* long URLs don't overflow the card */
+}
+.ms-chat-link:hover {
+  text-decoration-color: var(--accent);
+}
 .ms-clear-chat {
   align-self: flex-end;
   margin-top: 0.5rem;
@@ -2298,6 +2393,67 @@ body.modal-open { overflow: hidden; }
   font-size: 0.85rem;
   color: var(--muted);
   line-height: 1.6;
+}
+
+/* ── AI source-tag chips ──
+   Rendered by renderWithSourceTags(); colors encode authority. */
+.src-chip {
+  display: inline-block;
+  margin: 0 0.2em;
+  padding: 1px 7px;
+  border-radius: 999px;
+  font-size: 0.68rem;
+  font-weight: 600;
+  line-height: 1.4;
+  letter-spacing: 0.02em;
+  text-transform: lowercase;
+  vertical-align: baseline;
+  white-space: nowrap;
+  border: 1px solid transparent;
+}
+/* User-entered data — highest authority, green */
+.src-chip.src-user-verified {
+  background: rgba(34, 197, 94, 0.14);
+  color: #15803d;
+  border-color: rgba(34, 197, 94, 0.35);
+}
+/* Attachment content — user-curated, teal */
+.src-chip.src-attachment {
+  background: rgba(20, 184, 166, 0.14);
+  color: #0f766e;
+  border-color: rgba(20, 184, 166, 0.35);
+}
+/* Live web fetch (Tavily extract of supplier site) — blue */
+.src-chip.src-web-fetch {
+  background: rgba(59, 130, 246, 0.14);
+  color: #1d4ed8;
+  border-color: rgba(59, 130, 246, 0.35);
+}
+/* Live web search (Serper / Google) — indigo */
+.src-chip.src-web-search {
+  background: rgba(99, 102, 241, 0.14);
+  color: #4338ca;
+  border-color: rgba(99, 102, 241, 0.35);
+}
+/* Deep Research — AI-synthesized from web research; amber.
+   Sits between web-sourced and rule-based in authority, matching the
+   backend priority order. */
+.src-chip.src-deep-research {
+  background: rgba(245, 158, 11, 0.14);
+  color: #b45309;
+  border-color: rgba(245, 158, 11, 0.38);
+}
+/* Rule-based scoring snapshot — neutral grey */
+.src-chip.src-rule-based {
+  background: rgba(107, 114, 128, 0.14);
+  color: #374151;
+  border-color: rgba(107, 114, 128, 0.35);
+}
+/* AI-derived inference — lowest authority, purple */
+.src-chip.src-ai-analysis {
+  background: rgba(168, 85, 247, 0.14);
+  color: #7e22ce;
+  border-color: rgba(168, 85, 247, 0.35);
 }
 
 /* Filters + Controls */
@@ -2490,6 +2646,16 @@ body.modal-open { overflow: hidden; }
 .ms-stat { text-align: right; }
 .ms-stat-label { font-size: 0.65rem; font-weight: 600; text-transform: uppercase; letter-spacing: 0.06em; color: var(--muted); }
 .ms-stat-value { font-size: 0.95rem; font-weight: 700; color: var(--text); }
+
+/* Small green check next to the Price label when the displayed value
+   comes from the user's quoted_price (more trustworthy than the regex-
+   extracted price_display). */
+.ms-price-verified {
+  color: #15803d;
+  font-size: 0.75rem;
+  margin-left: 2px;
+  cursor: help;
+}
 .ms-stat-accent { color: var(--accent); }
 
 /* Notes row */
@@ -2541,6 +2707,28 @@ body.modal-open { overflow: hidden; }
 .ms-report-btn:hover {
   background: rgba(13,172,241,0.18);
   border-color: rgba(13,172,241,0.50);
+}
+
+.ms-details-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.25rem;
+  padding: 0.25rem 0.65rem;
+  font-size: 0.75rem;
+  font-weight: 600;
+  color: var(--text);
+  background: var(--card-bg);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  cursor: pointer;
+  text-decoration: none;
+  transition: all 0.2s;
+  font-family: var(--font);
+}
+.ms-details-btn:hover {
+  color: var(--accent);
+  border-color: rgba(13,172,241,0.45);
+  background: var(--accent-dim);
 }
 
 .ms-report-modal { max-width: 720px; }
@@ -2642,4 +2830,260 @@ body.modal-open { overflow: hidden; }
   .ms-filters { flex-direction: column; gap: 0.75rem; }
   .ms-cmp-grid { grid-template-columns: 1fr; }
   .ms-cmp-col { border-right: none; border-bottom: 1px solid var(--border); }
+}
+
+/* ===== SUPPLIER ASSESSMENT PAGE ===== */
+.assess-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-start;
+  gap: 1rem;
+  margin-bottom: 2rem;
+  padding-bottom: 1.5rem;
+  border-bottom: 1px solid var(--border);
+}
+.assess-readonly-meta {
+  display: flex;
+  gap: 1rem;
+  font-size: 0.9rem;
+  color: var(--muted);
+  margin-top: 0.5rem;
+  flex-wrap: wrap;
+}
+.assess-readonly-meta a { color: var(--accent); }
+.assess-save-status {
+  padding: 0.4rem 0.9rem;
+  font-size: 0.8rem;
+  font-weight: 600;
+  border-radius: 999px;
+  border: 1px solid var(--border);
+  background: var(--card-bg);
+  color: var(--muted);
+  white-space: nowrap;
+}
+.assess-save-status[data-state="saving"] { color: var(--accent); border-color: rgba(13,172,241,0.4); }
+.assess-save-status[data-state="saved"]  { color: #047857; border-color: rgba(16,185,129,0.4); background: rgba(16,185,129,0.08); }
+.assess-save-status[data-state="error"]  { color: #b91c1c; border-color: rgba(239,68,68,0.4); background: rgba(239,68,68,0.08); }
+
+.assess-section {
+  background: var(--card-bg);
+  border: 1px solid var(--border);
+  border-radius: 14px;
+  padding: 1.5rem;
+  margin-bottom: 1.25rem;
+}
+.assess-section-title {
+  font-size: 1rem;
+  font-weight: 700;
+  color: var(--text);
+  margin: 0 0 1.25rem;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+}
+
+.assess-field { margin-bottom: 1rem; }
+.assess-field:last-child { margin-bottom: 0; }
+.assess-label {
+  display: block;
+  font-size: 0.8rem;
+  font-weight: 600;
+  color: var(--muted);
+  margin-bottom: 0.4rem;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+.assess-input, .assess-select, .assess-textarea {
+  width: 100%;
+  padding: 0.55rem 0.8rem;
+  font-size: 0.92rem;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--card-bg);
+  color: var(--text);
+  box-sizing: border-box;
+  font-family: inherit;
+  transition: border-color 0.15s, box-shadow 0.15s;
+}
+.assess-input:focus, .assess-select:focus, .assess-textarea:focus {
+  outline: none;
+  border-color: var(--accent);
+  box-shadow: 0 0 0 3px rgba(13,172,241,0.12);
+}
+.assess-textarea { resize: vertical; min-height: 120px; }
+
+.assess-grid-2 { display: grid; grid-template-columns: 1fr 1fr; gap: 1rem; }
+.assess-grid-3 { display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 1rem; }
+@media (max-width: 720px) {
+  .assess-grid-2, .assess-grid-3 { grid-template-columns: 1fr; }
+}
+
+/* Stars */
+.assess-stars { display: flex; align-items: center; gap: 4px; }
+.assess-star {
+  background: none; border: none; cursor: pointer;
+  font-size: 1.5rem; line-height: 1;
+  color: var(--border); padding: 0 2px;
+  transition: color 0.15s, transform 0.1s;
+}
+.assess-star:hover { transform: scale(1.1); }
+.assess-star.is-filled { color: #f59e0b; }
+.assess-star-clear {
+  margin-left: 0.5rem;
+  background: none; border: none; cursor: pointer;
+  font-size: 0.75rem; color: var(--muted);
+  text-decoration: underline;
+}
+.assess-star-clear:hover { color: var(--text); }
+
+/* Chips */
+.assess-chips { display: flex; flex-wrap: wrap; gap: 6px; margin-bottom: 0.5rem; min-height: 0; }
+.assess-chips:empty { margin-bottom: 0; }
+.assess-chip {
+  display: inline-flex; align-items: center; gap: 4px;
+  padding: 0.25rem 0.6rem;
+  font-size: 0.8rem;
+  border-radius: 999px;
+  border: 1px solid rgba(13,172,241,0.35);
+  background: var(--accent-dim);
+  color: var(--accent);
+}
+.assess-chip-x {
+  background: none; border: none; cursor: pointer;
+  color: var(--accent); font-weight: 700;
+  padding: 0 2px; line-height: 1; font-size: 1rem;
+}
+.assess-chip-x:hover { color: #b91c1c; }
+.assess-chip-input-row { margin-top: 0.25rem; }
+
+/* Checkbox group */
+.assess-checks {
+  display: flex; flex-wrap: wrap; gap: 0.75rem 1.25rem;
+}
+.assess-checks label {
+  display: inline-flex; align-items: center; gap: 0.4rem;
+  font-size: 0.9rem; color: var(--text);
+  cursor: pointer;
+}
+.assess-checks input[type="checkbox"] { accent-color: var(--accent); }
+
+/* ===== ATTACHMENTS ===== */
+.assess-help-text {
+  margin: -0.5rem 0 1rem;
+  font-size: 0.85rem;
+  color: var(--muted);
+}
+
+.attachments-actions {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+  margin-bottom: 1rem;
+  flex-wrap: wrap;
+}
+
+.btn-attachment {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.35rem;
+  padding: 0.5rem 0.9rem;
+  font-size: 0.88rem;
+  font-weight: 600;
+  color: var(--btn-primary);
+  background: var(--card-bg);
+  border: 1px dashed var(--btn-primary);
+  border-radius: 8px;
+  cursor: pointer;
+  transition: background 0.15s, color 0.15s, border-style 0.15s;
+  font-family: inherit;
+}
+.btn-attachment:hover {
+  background: var(--btn-primary);
+  color: #fff;
+  border-style: solid;
+}
+.btn-attachment:disabled { opacity: 0.5; cursor: not-allowed; }
+
+.attachments-status {
+  font-size: 0.82rem;
+  color: var(--muted);
+}
+
+.attachments-list {
+  list-style: none;
+  padding: 0;
+  margin: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 0.45rem;
+}
+
+.attachments-empty {
+  padding: 0.75rem 0.9rem;
+  font-size: 0.85rem;
+  color: var(--muted);
+  font-style: italic;
+  border: 1px dashed var(--border);
+  border-radius: 8px;
+  background: transparent;
+}
+
+.attachment-item {
+  display: flex;
+  align-items: center;
+  gap: 0.6rem;
+  padding: 0.55rem 0.8rem;
+  background: var(--card-bg);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  font-size: 0.9rem;
+  transition: border-color 0.15s, background 0.15s;
+}
+.attachment-item:hover {
+  border-color: var(--btn-primary);
+  background: rgba(4, 87, 203, 0.04);
+}
+
+.attachment-icon {
+  font-size: 1.1rem;
+  line-height: 1;
+  flex-shrink: 0;
+}
+
+.attachment-name {
+  flex: 1;
+  min-width: 0;
+  color: var(--text);
+  text-decoration: none;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.attachment-name:hover {
+  color: var(--btn-primary);
+  text-decoration: underline;
+}
+
+.attachment-size {
+  font-size: 0.8rem;
+  color: var(--muted);
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+  flex-shrink: 0;
+}
+
+.attachment-delete {
+  background: none;
+  border: none;
+  color: var(--muted);
+  font-size: 1.15rem;
+  line-height: 1;
+  padding: 0.15rem 0.45rem;
+  cursor: pointer;
+  border-radius: 6px;
+  transition: color 0.15s, background 0.15s;
+  flex-shrink: 0;
+}
+.attachment-delete:hover {
+  color: #b91c1c;
+  background: rgba(239, 68, 68, 0.08);
 }

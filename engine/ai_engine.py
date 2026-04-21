@@ -7,8 +7,10 @@ Runs an INDEPENDENT supplier evaluation using the Gemma LLM.
 Never consumes any expert-system score or output.
 
 Public API:
-    call_model(prompt: str) -> str
-        Isolated HTTP caller. Swap this out to change the model.
+    call_model(prompt: str, images: list[bytes] | None = None) -> str
+        Isolated HTTP caller. Optionally passes JPEG image bytes as
+        multimodal inline_data parts so Gemma 3 can "see" them.
+        Swap this out to change the model.
     ai_evaluate(supplier: SupplierRecord) -> dict
         Returns {score, decision, risk_score, reasons, risk_flags}.
 
@@ -22,6 +24,7 @@ Environment variables:
     GEMMA_TIMEOUT   — optional; HTTP timeout in seconds (default 60)
 """
 
+import base64
 import json
 import os
 import re
@@ -68,10 +71,14 @@ _FALLBACK: dict = {
 # the rest of the evaluation logic.
 # ---------------------------------------------------------------------------
 
-def call_model(prompt: str) -> str:
+def call_model(prompt: str, images: list[bytes] | None = None) -> str:
     """
     Send a prompt to the configured Gemma model and return raw text.
     Returns "" on any error (caller must treat this as failure).
+
+    If `images` is provided, each entry is JPEG-encoded bytes; they are
+    base64-embedded alongside the prompt via Gemini's `inline_data` part
+    schema so Gemma 3 can read them with its vision capability.
 
     Retries up to GEMMA_MAX_ATTEMPTS times on network errors, HTTP 429,
     and HTTP 5xx, with exponential backoff (1s, 2s, 4s).
@@ -79,9 +86,20 @@ def call_model(prompt: str) -> str:
     if not _REQUESTS_OK or not _GEMMA_API_KEY:
         return ""
 
+    parts: list[dict] = [{"text": prompt}]
+    for img_bytes in (images or []):
+        if not img_bytes:
+            continue
+        parts.append({
+            "inline_data": {
+                "mime_type": "image/jpeg",
+                "data":      base64.b64encode(img_bytes).decode("ascii"),
+            }
+        })
+
     payload = {
         "contents": [
-            {"parts": [{"text": prompt}]}
+            {"parts": parts}
         ],
         "generationConfig": {
             "temperature":     0,    # deterministic
