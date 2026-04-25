@@ -124,7 +124,10 @@
 
   <script>
     function escapeHtml(s) {
-      return String(s).replace(/&/g,"&amp;").replace(/</g,"&lt;").replace(/>/g,"&gt;").replace(/"/g,"&quot;");
+      return String(s).replace(/&/g,"&amp;").replace(/</g,"&lt;").replace(/>/g,"&gt;").replace(/"/g,"&quot;").replace(/'/g,"&#039;");
+    }
+    function safeHref(url) {
+      return url && /^https?:/i.test(url) ? url : "#";
     }
 
     // AI source-tag → pill chip. Runs after escapeHtml so it's XSS-safe.
@@ -198,15 +201,20 @@
     // ── Load ──
     async function loadSuppliers() {
       document.getElementById("ms-loading").style.display = "flex";
-      try { _suppliers = await (await fetch("/api/saved-suppliers")).json(); }
-      catch (_) { _suppliers = []; }
+      try {
+        const resp = await fetch("/api/saved-suppliers");
+        if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
+        _suppliers = await resp.json();
+      } catch (_) {
+        _suppliers = null;
+      }
       document.getElementById("ms-loading").style.display = "none";
       renderAll();
     }
 
     // ── Filter + Sort ──
     function getFiltered() {
-      let list = [..._suppliers];
+      let list = [...(_suppliers || [])];
       if (_filterCountry !== "all") list = list.filter(s => s.country === _filterCountry);
       if (_filterRisk !== "all") list = list.filter(s => s.risk_level === _filterRisk);
       list.sort((a, b) => {
@@ -219,7 +227,7 @@
     }
 
     function getBestId() {
-      if (_suppliers.length === 0) return null;
+      if (!_suppliers || _suppliers.length === 0) return null;
       const sorted = [..._suppliers].sort((a, b) => (b.value_score || 0) - (a.value_score || 0));
       return sorted[0]?.id;
     }
@@ -230,6 +238,13 @@
       const list = document.getElementById("ms-list");
       const empty = document.getElementById("ms-empty");
 
+      if (_suppliers === null) {
+        list.style.display = "none";
+        controls.style.display = "none";
+        empty.style.display = "flex";
+        empty.innerHTML = '<p style="color:var(--risk-high,#c0392b)">Could not load suppliers — service temporarily unavailable. Please refresh the page.</p>';
+        return;
+      }
       if (_suppliers.length === 0) {
         list.style.display = "none";
         controls.style.display = "none";
@@ -311,7 +326,7 @@
             </div>
           </div>
           <div class="ms-card-bottom">
-            ${s.url ? `<a href="${escapeHtml(s.url)}" target="_blank" rel="noopener" class="ms-card-url">${escapeHtml(s.url)}</a>` : "<span></span>"}
+            ${s.url ? `<a href="${escapeHtml(safeHref(s.url))}" target="_blank" rel="noopener" class="ms-card-url">${escapeHtml(s.url)}</a>` : "<span></span>"}
             <div class="ms-card-actions">
               <span class="ms-card-date">Saved ${new Date(s.saved_at).toLocaleDateString()}</span>
               <a class="ms-details-btn" href="/supplier/${s.id}/edit">${hasAssessment(s) ? "✏️ Edit Details" : "➕ Add Details"}</a>
@@ -395,7 +410,7 @@
           <div class="ms-cmp-row"><span>Risk</span><strong class="${riskCls}">${escapeHtml(s.risk_level || "—")}</strong></div>
           <div class="ms-cmp-row"><span>Risk Score</span><strong>${s.risk_score != null ? (s.risk_score * 100).toFixed(0) + "%" : "—"}</strong></div>
           <div class="ms-cmp-row"><span>Trust</span><strong>${escapeHtml((s.trust || "N/A").toUpperCase())}</strong></div>
-          ${s.url ? `<div class="ms-cmp-url"><a href="${escapeHtml(s.url)}" target="_blank" rel="noopener">${escapeHtml(s.url)}</a></div>` : ""}
+          ${s.url ? `<div class="ms-cmp-url"><a href="${escapeHtml(safeHref(s.url))}" target="_blank" rel="noopener">${escapeHtml(s.url)}</a></div>` : ""}
           <button class="ms-report-btn ms-cmp-report-btn" onclick="openReport(${s.id})">📊 AI Deep Report</button>
         </div>`;
       }).join("");
@@ -551,6 +566,7 @@
 
       const answerEl = document.getElementById("ai-answer");
       const btn = document.getElementById("ai-search-btn");
+      btn.disabled = true;
       btn.classList.add("btn-running");
       answerEl.style.display = "";
       answerEl.innerHTML = '<div class="ms-ai-loading">Thinking...</div>';
@@ -558,10 +574,10 @@
 
       try {
         const selected_ids = _compareSet.size > 0 ? [..._compareSet] : null;
-        // Only send text role+content to the backend as history; don't
-        // serialize the full structured JSON back to Gemma every turn.
+        // Cap history to last 20 turns (10 round-trips) to keep requests bounded.
         const historyForApi = _chatHistory
           .slice(0, -1)
+          .slice(-20)
           .map(t => ({ role: t.role, content: t.content }));
 
         const resp = await fetch("/api/ai-search", {
@@ -569,29 +585,35 @@
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({ query, selected_ids, history: historyForApi }),
         });
-        const data = await resp.json();
+        if (!resp.ok) {
+          answerEl.innerHTML = `<div class="ms-ai-error">Service error (${resp.status}). Please try again.</div>`;
+        } else {
+          const data = await resp.json();
 
-        // Store this assistant turn with the FULL structured payload so
-        // renderChat can re-render the rich card for each past answer,
-        // not just the latest one.
-        const assistantText = (data.structured?.summary) || data.structured?.answer || data.answer || "";
-        _chatHistory.push({
-          role:       "assistant",
-          content:    String(assistantText).slice(0, 500),   // for prompt history
-          structured: data.structured || null,                 // for rendering
-          rawAnswer:  data.answer || "",                       // fallback
-        });
+          // Store this assistant turn with the FULL structured payload so
+          // renderChat can re-render the rich card for each past answer,
+          // not just the latest one.
+          const assistantText = (data.structured?.summary) || data.structured?.answer || data.answer || "";
+          _chatHistory.push({
+            role:       "assistant",
+            content:    String(assistantText).slice(0, 500),   // for prompt history
+            structured: data.structured || null,                 // for rendering
+            rawAnswer:  data.answer || "",                       // fallback
+          });
 
-        _highlights = data.structured?.highlights || [];
+          _highlights = data.structured?.highlights || [];
 
-        // The rich card now renders inside the chat thread via renderChat(),
-        // so clear the separate answerEl (it's only for the Thinking indicator).
-        answerEl.style.display = "none";
-        answerEl.innerHTML = "";
+          // The rich card now renders inside the chat thread via renderChat(),
+          // so clear the separate answerEl (it's only for the Thinking indicator).
+          answerEl.style.display = "none";
+          answerEl.innerHTML = "";
+        }
       } catch (_) {
-        answerEl.innerHTML = '<div class="ms-ai-error">Could not reach the server.</div>';
+        answerEl.innerHTML = '<div class="ms-ai-error">Service temporarily unavailable. Please try again.</div>';
+      } finally {
+        btn.disabled = false;
+        btn.classList.remove("btn-running");
       }
-      btn.classList.remove("btn-running");
       renderChat();
       renderList();
     }

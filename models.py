@@ -3,7 +3,7 @@ models.py — SQLAlchemy models.
 """
 
 from datetime import datetime, timezone
-from sqlalchemy import Column, Integer, String, Float, Text, DateTime, Date, JSON, ForeignKey, Boolean
+from sqlalchemy import Column, Index, Integer, String, Float, Text, DateTime, Date, JSON, ForeignKey, Boolean
 from sqlalchemy.orm import relationship
 from db import Base
 
@@ -56,9 +56,14 @@ class SavedSupplier(Base):
     sample_status = Column(String(30), nullable=True)
     sample_quality = Column(Integer, nullable=True)
     factory_verified_via = Column(JSON, nullable=True)
+    # Legacy narrow columns kept for backwards compat (old data); use reference_1/2/3 for new writes.
     coating_confirmed = Column(String(20), nullable=True)
     core_material_confirmed = Column(String(20), nullable=True)
     fire_rating_confirmed = Column(String(10), nullable=True)
+    # Free-text reference links / notes (replaces the mislabelled legacy columns above)
+    reference_1 = Column(Text, nullable=True)
+    reference_2 = Column(Text, nullable=True)
+    reference_3 = Column(Text, nullable=True)
     warranty_years = Column(Integer, nullable=True)
     next_action_date = Column(Date, nullable=True)
 
@@ -66,6 +71,10 @@ class SavedSupplier(Base):
         "SupplierAttachment",
         back_populates="supplier",
         cascade="all, delete-orphan",
+    )
+
+    __table_args__ = (
+        Index("ix_supplier_name_url", "supplier_name", "url"),
     )
 
 

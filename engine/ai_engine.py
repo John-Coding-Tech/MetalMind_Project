@@ -109,7 +109,8 @@ def call_model(prompt: str, images: list[bytes] | None = None) -> str:
     for attempt in range(_MAX_ATTEMPTS):
         try:
             resp = _requests.post(
-                f"{_GEMMA_API_URL}?key={_GEMMA_API_KEY}",
+                _GEMMA_API_URL,
+                params={"key": _GEMMA_API_KEY},
                 json=payload,
                 timeout=_TIMEOUT,
             )
@@ -171,7 +172,8 @@ def call_model_fast(prompt: str, timeout: float = 5.0,
         gen_config["responseMimeType"] = "application/json"
     try:
         resp = _requests.post(
-            f"{_GEMMA_API_URL}?key={_GEMMA_API_KEY}",
+            _GEMMA_API_URL,
+            params={"key": _GEMMA_API_KEY},
             json={
                 "contents": [{"parts": [{"text": prompt}]}],
                 "generationConfig": gen_config,
