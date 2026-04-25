@@ -27,6 +27,7 @@ from fastapi.responses import FileResponse
 from pydantic import BaseModel, Field
 
 from services.search import search_suppliers as multi_search
+from services.multi_search import multi_search_and_merge
 from services.serper_client import SerperError
 from modules.cleaner        import clean_results
 from modules.risk_scorer    import RiskLevel, score_all
@@ -36,10 +37,16 @@ from engine.recommendation  import generate_recommendation
 from engine.ai_engine        import call_model
 from engine.ai_insight       import generate_insight
 from engine.ai_crosscheck    import cross_check
-from engine.anomaly          import dataset_median, detect_anomalies
+from engine.anomaly          import dataset_median, dataset_medians, detect_anomalies
 from engine.ai_adjustment    import from_crosscheck as adj_from_crosscheck, apply as adj_apply
+from engine.query_parser    import parse_search_query
+from engine.price_estimator import (
+    estimate_supplier_price,
+    classify_price_vs_market,
+    market_reference_for,
+)
 from modules.currency       import get_rates
-from config                 import DECISION_SCORE_THRESHOLD
+from config                 import DECISION_SCORE_THRESHOLD, ANALYZE_TOTAL_BUDGET, DISPLAY_SUPPLIER_LIMIT
 from db import init_db
 from routes.suppliers import router as suppliers_router
 
@@ -57,6 +64,11 @@ FRONTEND = Path(__file__).parent / "frontend"
 
 class AnalyzeRequest(BaseModel):
     max_results: int = Field(default=5, ge=1, le=20)
+    # New chat-driven fields. When `query` is empty the endpoint falls back to
+    # the legacy ACP India+China search for backward compatibility.
+    query:  str        = ""
+    parsed: dict | None = None    # frontend may send an edited parse override
+    debug:  bool       = False    # when true, response includes raw trace
 
 
 class SupplierOut(BaseModel):
@@ -75,6 +87,43 @@ class SupplierOut(BaseModel):
     ai_adjustment: dict | None = None
     trust:        str | None = None       # "safe" | "warning" | "risk" | None
     anomalies:    dict | None = None
+    # Multi-metal / multi-unit additions
+    category:          str | None = None  # acp | aluminum | steel | ...
+    price_unit:        str | None = None  # sqm | ton | kg | meter | piece | ft | unknown
+    price_unit_source: str | None = None  # regex | keyword | category | unknown
+    price_original:    str | None = None  # e.g. "CNY 25000-28000/ton"
+    angle_count:       int | None = None  # how many search angles matched this URL
+    angles_matched:    list[str] | None = None
+    bucket_key:        str | None = None  # "category:canonical_unit"
+    bucket_size:       int | None = None
+    # --- Hybrid pricing (path C) ---------------------------------------
+    # Per-supplier model estimate — populated ONLY when no real price was
+    # extracted. Always a range (low/high in USD per canonical unit), never
+    # a single point, and always labeled `price_estimate_source="model"`
+    # so the frontend can apply the "⚠ model" treatment.
+    price_estimated_low_usd:  float | None = None
+    price_estimated_high_usd: float | None = None
+    price_estimate_source:    str   | None = None   # "model" or None
+
+    # Classification of real scraped price vs per-country market midpoint.
+    # None when no real price to compare. Values: suspicious_low | within |
+    # above | far_above.
+    price_range_status: str | None = None
+
+
+class MarketReference(BaseModel):
+    """
+    Top-of-results market reference band for the "hybrid pricing" banner.
+    Always in AUD (matching the response currency) for direct display.
+    """
+    low_aud:          float
+    high_aud:         float
+    unit:             str
+    category:         str
+    country_scope:    list[str]         # [] means global
+    samples_from_search: int            # # of suppliers in this search with real prices
+    samples_low_aud:  float | None = None
+    samples_high_aud: float | None = None
 
 
 class AnalyzeResponse(BaseModel):
@@ -89,6 +138,13 @@ class AnalyzeResponse(BaseModel):
     risk_note:     str
     decision:      str = "recommended"
     trust:         str = "safe"           # top-level trust signal for the winner
+    # Chat-driven additions
+    parsed:        dict | None = None     # echo of the parsed query for the parse-preview UI
+    partial:       bool       = False     # true if AI cross-check was skipped to honor budget
+    trace:         dict | None = None     # debug-only: pipeline timings + plan summary
+    clarification: str | None = None      # LLM guardrail question when query is too vague
+    # Hybrid pricing (path C)
+    market_reference: MarketReference | None = None
 
 
 class InsightResponse(BaseModel):
@@ -107,8 +163,8 @@ class InsightResponse(BaseModel):
 
 def _fetch_suppliers(req: AnalyzeRequest, rates: dict):
     """
-    Multi-source search (Serper primary, Tavily fallback/enrichment)
-    for India + China in parallel, then rule-based cleaning.
+    Legacy ACP India + China search. Used when no chat query is supplied so
+    the original landing-page button keeps working unchanged.
     """
     t0 = time.time()
     try:
@@ -121,8 +177,8 @@ def _fetch_suppliers(req: AnalyzeRequest, rates: dict):
         raise HTTPException(status_code=503, detail=f"Supplier search unavailable: {e}")
 
     t1 = time.time()
-    india_clean = clean_results(india_raw, country_override="India", rates=rates, use_ai=False)
-    china_clean = clean_results(china_raw, country_override="China", rates=rates, use_ai=False)
+    india_clean = clean_results(india_raw, country_override="India", rates=rates, use_ai=False, category="acp")
+    china_clean = clean_results(china_raw, country_override="China", rates=rates, use_ai=False, category="acp")
     all_records = india_clean + china_clean
 
     _log.info("[perf] search=%.1fs  clean=%.2fs  records=%d", t1 - t0, time.time() - t1, len(all_records))
@@ -132,21 +188,95 @@ def _fetch_suppliers(req: AnalyzeRequest, rates: dict):
     return all_records
 
 
-def _to_supplier_out(rank: int, v, median: float | None) -> SupplierOut:
+def _fetch_suppliers_from_chat(parsed: dict, rates: dict, max_results: int):
+    """
+    Chat-driven multi-angle search. Calls multi_search_and_merge() with the
+    parsed query to fan out across (country, angle) plans, then runs the
+    same rule-based cleaner with the parsed category as the relevance filter.
+    """
+    t0 = time.time()
+    try:
+        merged = multi_search_and_merge(parsed, max_calls=8, per_query_results=max_results)
+    except Exception as e:  # noqa: BLE001
+        raise HTTPException(status_code=503, detail=f"Supplier search unavailable: {e}")
+
+    t1 = time.time()
+    category = parsed.get("category") or "unknown"
+    # Strict country filter only when the user actually specified countries.
+    # Empty list / None = global search, no filter.
+    allowed = list(parsed.get("countries") or []) or None
+    cleaned  = clean_results(
+        merged, rates=rates, use_ai=False,
+        category=category, allowed_countries=allowed,
+    )
+    _log.info("[perf] chat search=%.1fs clean=%.2fs records=%d (category=%s, countries=%s)",
+              t1 - t0, time.time() - t1, len(cleaned), category, allowed or "global")
+
+    if not cleaned:
+        raise HTTPException(status_code=404, detail="No suppliers found for this query.")
+    return cleaned, len(merged), (t1 - t0, time.time() - t1)
+
+
+def _to_supplier_out(
+    rank: int,
+    v,
+    medians_by_bucket: dict | None = None,
+    query_variant: str = "",
+) -> SupplierOut:
+    rec    = v.scored.record
+    sigs   = rec.signals or {}
+    angles = sigs.get("angles_matched") or []
+    category = getattr(rec, "category", None) or "unknown"
+
+    # Path C: hybrid pricing.
+    # Only compute a model estimate if we have NO real extracted price.
+    # When a real price exists, classify it against the per-country market
+    # midpoint (for the ✓ Within / ⚠ Above / 🚨 badges).
+    est_low = est_high = None
+    est_src = None
+    if rec.price_est is None:
+        est = estimate_supplier_price(rec, category, query_variant)
+        if est:
+            est_low, est_high, est_src = est["low"], est["high"], est["source"]
+
+    range_status = None
+    if rec.price_est is not None:
+        range_status = classify_price_vs_market(
+            rec.price_est, category, rec.country, query_variant,
+        )
+
+    # Only surface a real price when we actually extracted one. The scorer
+    # fills `price_used=0.0` as a neutral fallback for missing-price rows;
+    # passing that through would mislead the frontend into thinking a 0.0
+    # USD price was scraped.
+    price_usd_out = v.price_used if (rec.price_est is not None and v.price_used > 0) else None
+
     return SupplierOut(
         rank=rank,
-        name=v.scored.record.name,
-        country=v.scored.record.country,
-        url=v.scored.record.url,
-        description=v.scored.record.description,
-        price_usd=v.price_used,
-        price_raw=v.scored.record.price_raw,
+        name=rec.name,
+        country=rec.country,
+        url=rec.url,
+        description=rec.description,
+        price_usd=price_usd_out,
+        price_raw=rec.price_raw,
         risk_level=v.scored.risk_level.value,
         risk_score=v.scored.risk_score,
         risk_reasons=v.scored.risk_reasons,
         value_score=round(v.value_score * 100, 1),
         base_score=round(v.value_score * 100, 1),
-        anomalies=detect_anomalies(v, median),
+        anomalies=detect_anomalies(v, medians_by_bucket),
+        category=category if category != "unknown" else None,
+        price_unit=getattr(rec, "price_unit", None),
+        price_unit_source=getattr(rec, "price_unit_source", None),
+        price_original=getattr(rec, "price_original", None),
+        angle_count=sigs.get("angle_count"),
+        angles_matched=list(angles) if angles else None,
+        bucket_key=getattr(v, "bucket_key", None),
+        bucket_size=getattr(v, "bucket_size", None),
+        price_estimated_low_usd=est_low,
+        price_estimated_high_usd=est_high,
+        price_estimate_source=est_src,
+        price_range_status=range_status,
     )
 
 
@@ -163,13 +293,20 @@ def _trust_from_validation(validation: dict) -> str:
 
 def _supplier_audit_dict(v, symbol: str, fx: float) -> dict:
     rec = v.scored.record
-    price = f"{symbol}{(rec.price_est * fx):.2f}/sqm" if rec.price_est is not None else "unknown"
+    unit = getattr(rec, "price_unit", "sqm") or "sqm"
+    if unit == "unknown":
+        unit = "unit"
+    price = (
+        f"{symbol}{(rec.price_est * fx):.2f}/{unit}"
+        if rec.price_est is not None else "unknown"
+    )
     return {
         "name": rec.name, "country": rec.country,
         "price_display": price, "price_raw": rec.price_raw,
         "risk_level": v.scored.risk_level.value,
         "value_score": round(v.value_score * 100, 1),
         "url": rec.url, "description": rec.description,
+        "category": getattr(rec, "category", "acp"),
     }
 
 
@@ -217,6 +354,25 @@ _last_ranked: dict[str, object] = {}   # name → ValuedSupplier
 # Pipeline: Rule Engine → AI Cross-Check → Trust Signal → Response
 # ---------------------------------------------------------------------------
 
+class ParseRequest(BaseModel):
+    query: str
+
+
+class ParseResponse(BaseModel):
+    parsed: dict
+
+
+@app.post("/api/parse", response_model=ParseResponse)
+def parse_only(req: ParseRequest):
+    """
+    Run the chat-query parser only — no Serper calls, no scoring. Used by
+    the frontend to show an editable parse preview before committing to a
+    paid multi-angle search.
+    """
+    parsed = parse_search_query(req.query or "")
+    return ParseResponse(parsed=parsed)
+
+
 @app.post("/api/analyze", response_model=AnalyzeResponse)
 def analyze(req: AnalyzeRequest):
     t_start = time.time()
@@ -226,8 +382,39 @@ def analyze(req: AnalyzeRequest):
 
     gemma_available = bool(os.environ.get("GEMMA_API_KEY"))
 
-    rates       = get_rates()
-    all_records = _fetch_suppliers(req, rates)
+    rates = get_rates()
+
+    # ─────────────────────────────────────────────────────────────────────
+    # Branch: chat-driven flow vs legacy ACP India+China flow
+    # ─────────────────────────────────────────────────────────────────────
+    parsed_for_response: dict | None = None
+    raw_url_count = 0
+    chat_timings: tuple[float, float] | None = None
+    clarification: str | None = None
+
+    if req.query or req.parsed:
+        # Chat path. Prefer caller-supplied parsed override (the user may have
+        # edited it in the parse-preview UI); otherwise run the LLM/regex parser.
+        if req.parsed:
+            parsed = req.parsed
+        else:
+            parsed = parse_search_query(req.query)
+
+        # LLM guardrail: when the query is too vague, return a clarification
+        # question instead of running an expensive blind search.
+        if parsed.get("needs_clarification") and parsed.get("clarification_question"):
+            clarification = parsed["clarification_question"]
+            raise HTTPException(
+                status_code=422,
+                detail={"clarification": clarification, "parsed": parsed},
+            )
+
+        all_records, raw_url_count, chat_timings = _fetch_suppliers_from_chat(
+            parsed, rates, max_results=req.max_results
+        )
+        parsed_for_response = parsed
+    else:
+        all_records = _fetch_suppliers(req, rates)
 
     # --- Layer 1: RULE ENGINE (decision maker) ---
     scored = score_all(all_records)
@@ -235,8 +422,9 @@ def analyze(req: AnalyzeRequest):
     ranked = rank_suppliers(valued)
     top3   = get_top3(ranked)
     winner = get_winner(top3)
-    narr   = generate_recommendation(winner, top3)
-    median = dataset_median(ranked)
+    narr             = generate_recommendation(winner, top3)
+    median           = dataset_median(ranked)        # legacy global, used by ai_adjustment
+    medians_by_bucket = dataset_medians(ranked)      # per-(category, canonical_unit) for anomaly
 
     # Cache ranked results for on-demand insight
     global _last_ranked
@@ -245,14 +433,22 @@ def analyze(req: AnalyzeRequest):
     fx     = rates.get("AUD", 1.58)
     symbol = "A$"
 
-    # --- Layer 2: AI CROSS-CHECK (automatic, single call) ---
+    # --- Layer 2: AI CROSS-CHECK (skipped if total budget already exhausted) ---
     validation = {"source": "fallback"}
-    if gemma_available:
+    partial    = False
+    elapsed    = time.time() - t_start
+    if gemma_available and elapsed < ANALYZE_TOTAL_BUDGET:
         t_ai = time.time()
         winner_audit = _supplier_audit_dict(winner, symbol, fx)
         alt_audits   = [_supplier_audit_dict(v, symbol, fx) for v in top3 if v is not winner]
         validation   = cross_check(winner_audit, alt_audits)
         _log.info("[perf] cross-check=%.1fs", time.time() - t_ai)
+    elif gemma_available:
+        partial = True
+        _log.warning(
+            "[budget] cross-check SKIPPED: %.1fs already elapsed (>= %.1fs budget)",
+            elapsed, ANALYZE_TOTAL_BUDGET,
+        )
 
     # --- Layer 3: TRUST SIGNAL ---
     trust = _trust_from_validation(validation)
@@ -260,9 +456,11 @@ def analyze(req: AnalyzeRequest):
     # Apply cross-check adjustment to winner's score
     winner_adj = adj_from_crosscheck(validation)
 
+    query_variant = (parsed_for_response or {}).get("variant") or ""
+
     all_out: list[SupplierOut] = []
     for v in ranked:
-        so = _to_supplier_out(0, v, median)
+        so = _to_supplier_out(0, v, medians_by_bucket, query_variant=query_variant)
         if v is winner:
             so.trust = trust
             if winner_adj.get("adjustment"):
@@ -275,6 +473,10 @@ def analyze(req: AnalyzeRequest):
     for i, s in enumerate(all_out):
         s.rank = i + 1
 
+    # Cap the user-facing list to the top N. Ranking, medians and anomaly
+    # baselines were computed over the full ranked set above; from here on
+    # we just stop surfacing the long tail the user won't read anyway.
+    all_out    = all_out[:DISPLAY_SUPPLIER_LIMIT]
     top3_out   = all_out[:3]
     winner_out = all_out[0]
 
@@ -295,13 +497,62 @@ def analyze(req: AnalyzeRequest):
         else "not_recommended"
     )
 
-    _log.info("[perf] /api/analyze  total=%.1fs  trust=%s", time.time() - t_start, trust)
+    total = time.time() - t_start
+    _log.info("[perf] /api/analyze  total=%.1fs  trust=%s  partial=%s", total, trust, partial)
+
+    trace = None
+    if req.debug:
+        trace = {
+            "total_seconds":   round(total, 2),
+            "budget_seconds":  ANALYZE_TOTAL_BUDGET,
+            "raw_url_count":   raw_url_count,
+            "ranked_count":    len(ranked),
+            "partial":         partial,
+            "parsed":          parsed_for_response,
+        }
+        if chat_timings:
+            trace["search_seconds"] = round(chat_timings[0], 2)
+            trace["clean_seconds"]  = round(chat_timings[1], 2)
+
+    # --- Market reference band ---------------------------------------
+    # Convert the USD band from price_estimator into AUD for display, and
+    # attach the real-price sample envelope (min/max of scraped prices in
+    # this search) as the "blended" second line on the banner.
+    market_ref = None
+    if parsed_for_response:
+        cat_for_banner = parsed_for_response.get("category") or "unknown"
+        ref_usd = market_reference_for(
+            cat_for_banner,
+            parsed_for_response.get("countries") or [],
+            query_variant,
+        )
+        if ref_usd:
+            # Count only suppliers with a truly-scraped price. `price_usd`
+            # can be 0.0 for no-price rows (value_scorer's neutral fallback),
+            # which would falsely inflate the sample count.
+            real_prices_aud = [
+                s.price_usd * fx for s in all_out
+                if s.price_usd and s.price_usd > 0
+            ]
+            market_ref = MarketReference(
+                low_aud=round(ref_usd["low_usd"]  * fx, 2),
+                high_aud=round(ref_usd["high_usd"] * fx, 2),
+                unit=ref_usd["unit"],
+                category=ref_usd["category"],
+                country_scope=ref_usd["country_scope"],
+                samples_from_search=len(real_prices_aud),
+                samples_low_aud=round(min(real_prices_aud), 2) if real_prices_aud else None,
+                samples_high_aud=round(max(real_prices_aud), 2) if real_prices_aud else None,
+            )
 
     return AnalyzeResponse(
         currency="AUD", symbol=symbol, fx=fx,
         winner=winner_out, top3=top3_out, all_suppliers=all_out,
         summary=narr.summary, explanation=explanation,
         risk_note=risk_note, decision=decision, trust=trust,
+        parsed=parsed_for_response, partial=partial, trace=trace,
+        clarification=clarification,
+        market_reference=market_ref,
     )
 
 

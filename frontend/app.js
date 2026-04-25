@@ -94,7 +94,7 @@ async function saveSupplier(supplier, btnEl) {
       body: JSON.stringify({
         supplier_name: supplier.name,
         country: supplier.country,
-        price_display: supplier.price_usd ? formatPrice(supplier.price_usd, _lastSymbol, _lastFx) : null,
+        price_display: supplier.price_usd ? formatPrice(supplier.price_usd, _lastSymbol, _lastFx, supplier.price_unit, supplier.price_unit_source) : null,
         price_usd: supplier.price_usd,
         risk_level: supplier.risk_level,
         risk_score: supplier.risk_score,
@@ -143,6 +143,11 @@ function _hideAllStates() {
 function showIdle() {
   _hideAllStates();
   document.getElementById("idle-state").style.display = "flex";
+  // Reset chat UI to its default state (visible form, hidden preview/clarification).
+  hide("parse-preview");
+  hide("clarification");
+  show("chat-form");
+  _pendingParsed = null;
   // Show "Previous Analysis Result" button only if we have cached data
   const prevBtn = document.getElementById("previous-analysis-btn");
   if (prevBtn) {
@@ -210,8 +215,102 @@ function riskClass(level) {
   return level === "Low" ? "risk-low" : level === "Medium" ? "risk-medium" : "risk-high";
 }
 
-function formatPrice(usd, symbol, fx) {
-  return `${symbol}${(usd * fx).toFixed(2)}/sqm`;
+// Multi-unit aware price formatting. unit defaults to "sqm" for backward
+// compat with the legacy ACP flow. unitSource lets us flag estimates with
+// "(est.)" so users know when the unit was inferred vs scraped explicitly.
+function formatPrice(usd, symbol, fx, unit, unitSource) {
+  if (usd == null) return "—";
+  const u = unit && unit !== "unknown" ? unit : "unit";
+  const head = `${symbol}${(usd * fx).toFixed(2)}/${u}`;
+  if (unitSource && unitSource !== "regex") {
+    const tag = unitSource === "keyword" ? "est." : unitSource === "category" ? "est." : "?";
+    return `${head} <span class="unit-est unit-est-${unitSource}">(${tag})</span>`;
+  }
+  return head;
+}
+
+// ---------------------------------------------------------------------------
+// Hybrid pricing helpers (path C): per-supplier model estimate + market
+// range status badges.
+// ---------------------------------------------------------------------------
+
+// Badge shown next to a real extracted price, based on its ratio to the
+// per-country market midpoint (backend classifies into 4 buckets).
+function priceRangeBadge(status) {
+  if (!status) return "";
+  const meta = {
+    within:           { label: "✓ Within market range",    cls: "pr-within" },
+    above:            { label: "⚠ Above market",           cls: "pr-above" },
+    far_above:        { label: "🚨 Far above market",      cls: "pr-far-above" },
+    suspicious_low:   { label: "🚨 Suspiciously low",      cls: "pr-low" },
+  }[status];
+  if (!meta) return "";
+  return `<span class="price-range-badge ${meta.cls}">${meta.label}</span>`;
+}
+
+// Sub-line shown UNDER "Quote on request" when we have a per-supplier
+// model estimate. Visually secondary (small + grey + ⚠) per product rules.
+// `fallbackUnit` comes from market_reference so estimates for no-price
+// suppliers still show a sensible unit (e.g. "sqm") instead of "unknown".
+function priceEstimateLine(supplier, symbol, fx, fallbackUnit) {
+  const lo = supplier.price_estimated_low_usd;
+  const hi = supplier.price_estimated_high_usd;
+  if (lo == null || hi == null) return "";
+  const raw = supplier.price_unit && supplier.price_unit !== "unknown"
+    ? supplier.price_unit
+    : (fallbackUnit || "unit");
+  return `<div class="price-estimate">
+    <span class="price-estimate-label">Estimated: ${symbol}${(lo * fx).toFixed(2)}–${symbol}${(hi * fx).toFixed(2)}/${raw}</span>
+    <span class="price-estimate-warn" title="Estimated from country, supplier type, finish and scale signals — not a quoted price.">⚠ model</span>
+  </div>`;
+}
+
+// Main price cell: prefers real price + status badge, falls back to
+// "Quote on request" + estimate range sub-line. Estimates are NEVER
+// shown alongside a real price (product rule: one source of truth).
+function renderPriceCell(s, symbol, fx, fallbackUnit) {
+  if (s.price_usd != null) {
+    return `${formatPrice(s.price_usd, symbol, fx, s.price_unit, s.price_unit_source)}
+            ${priceRangeBadge(s.price_range_status)}`;
+  }
+  const rfq = `<span class="price-rfq" title="Supplier does not publish prices online — contact for a quote">Quote on request</span>`;
+  const est = priceEstimateLine(s, symbol, fx, fallbackUnit);
+  return est ? `${rfq}${est}` : rfq;
+}
+
+// Top-of-results market reference banner. Hidden (display:none) when the
+// backend couldn't produce a reference (e.g. category=unknown).
+function renderMarketReferenceBanner(ref, symbol) {
+  const el = document.getElementById("market-reference");
+  const samplesEl = document.getElementById("market-reference-samples");
+  if (!el) return;
+  if (!ref) { el.style.display = "none"; return; }
+
+  const catLabel = _humanCategory(ref.category);
+  const scope    = (ref.country_scope && ref.country_scope.length)
+    ? ref.country_scope.join(", ")
+    : "Global";
+  const labelEl = document.getElementById("market-reference-label");
+  const rangeEl = document.getElementById("market-reference-range");
+  if (labelEl) labelEl.textContent = `${catLabel} market reference (${scope})`;
+  if (rangeEl) {
+    rangeEl.innerHTML = `<strong>${symbol}${ref.low_aud.toFixed(2)} – ${symbol}${ref.high_aud.toFixed(2)}</strong> / ${ref.unit}`;
+  }
+
+  if (samplesEl) {
+    if (ref.samples_from_search > 0 && ref.samples_low_aud != null) {
+      const n = ref.samples_from_search;
+      const lo = ref.samples_low_aud.toFixed(2);
+      const hi = ref.samples_high_aud.toFixed(2);
+      samplesEl.textContent = `Your search: ${n} supplier${n === 1 ? "" : "s"} quoted ${symbol}${lo}${lo !== hi ? `–${symbol}${hi}` : ""} / ${ref.unit}`;
+      samplesEl.style.display = "";
+    } else {
+      samplesEl.textContent = "No suppliers in this search published a price — model estimates shown below.";
+      samplesEl.style.display = "";
+    }
+  }
+
+  el.style.display = "";
 }
 
 function escapeHtml(s) {
@@ -247,7 +346,36 @@ function aiAdjBadge(supplier) {
 }
 
 function valueScoreHTML(supplier) {
-  return `${supplier.value_score}/100 ${aiAdjBadge(supplier)}`;
+  // Score-breakdown hover: shows price/risk/bucket so the user can see *why*
+  // the number is what it is. Hidden behind a title attribute for now.
+  const breakdown = scoreBreakdownTip(supplier);
+  return `<span class="value-score" title="${escapeHtml(breakdown)}">${supplier.value_score}/100</span> ${aiAdjBadge(supplier)}`;
+}
+
+function scoreBreakdownTip(s) {
+  const parts = [];
+  parts.push(`Risk: ${s.risk_level} (${(s.risk_score || 0).toFixed(2)})`);
+  if (s.bucket_key) {
+    const bs = s.bucket_size != null ? ` • ${s.bucket_size} samples` : "";
+    parts.push(`Bucket: ${s.bucket_key}${bs}`);
+  }
+  if (s.angle_count) {
+    parts.push(`${s.angle_count} search angle${s.angle_count > 1 ? "s" : ""} matched`);
+  }
+  if (s.price_unit_source && s.price_unit_source !== "regex" && s.price_unit) {
+    parts.push(`Unit "${s.price_unit}" inferred from ${s.price_unit_source}`);
+  }
+  return parts.join(" | ");
+}
+
+// Multi-angle trust chip: more angles matched = stronger search signal.
+function angleChipHTML(s) {
+  const n = s.angle_count || 0;
+  if (!n) return "";
+  const cls = n >= 3 ? "angle-chip-high" : n === 2 ? "angle-chip-med" : "angle-chip-low";
+  const angles = (s.angles_matched || []).join(", ");
+  const tip = `Matched search angles: ${angles}`;
+  return `<span class="angle-chip ${cls}" title="${escapeHtml(tip)}">${n}-angle</span>`;
 }
 
 // Trust signal — authoritative verdict labels
@@ -438,101 +566,189 @@ async function fetchInsight(supplier, containerEl, opts = {}) {
 // Render results
 // ---------------------------------------------------------------------------
 
+// ---------------------------------------------------------------------------
+// Search details (replaces the former winner card)
+// ---------------------------------------------------------------------------
+
+function _capitalize(s) {
+  if (!s) return "";
+  return s.charAt(0).toUpperCase() + s.slice(1);
+}
+
+function _humanCategory(cat) {
+  if (!cat || cat === "unknown") return "Any metal";
+  const map = {
+    acp: "ACP (aluminium composite panel)",
+    aluminum: "Aluminium",
+    steel: "Carbon steel",
+    stainless_steel: "Stainless steel",
+    copper: "Copper",
+    brass: "Brass",
+    zinc: "Zinc",
+    titanium: "Titanium",
+    tube: "Metal tube",
+    pipe: "Metal pipe",
+  };
+  return map[cat] || _capitalize(cat);
+}
+
+function _humanVariant(v) {
+  if (!v) return "";
+  return v.replace(/_/g, " ");    // "pvdf_coated" -> "pvdf coated"
+}
+
+// Called by the search-details "Edit & re-search" link.
+// For now we go back to the homepage chat box — inline editing is a later
+// enhancement (user explicitly chose the simpler A path).
+function goEditSearch() {
+  showIdle();
+}
+
+function renderSearchDetails(parsed, data) {
+  const body   = document.getElementById("search-details-body");
+  const footer = document.getElementById("search-details-footer");
+  if (!body || !footer) return;
+
+  // --- Body: natural-language summary of parsed query -------------------
+  // Shape looks like a 4-line chat response, not a filter form.
+  const cat     = _humanCategory(parsed && parsed.category);
+  const variant = parsed && _humanVariant(parsed.variant);
+  const material = parsed && parsed.material;
+
+  // "Searching for: ACP · Marble finish · PVDF coated"
+  const productParts = [cat];
+  if (variant && variant !== "solid") productParts.push(variant + " finish");
+  if (material) productParts.push("grade " + material);
+  const product = productParts.join(" · ");
+
+  const countries = parsed && parsed.countries && parsed.countries.length
+    ? parsed.countries.join(", ")
+    : "Any country (global search)";
+
+  const spec = (parsed && parsed.spec) ? parsed.spec : "Not specified";
+
+  let priceBand = "Any price";
+  const pr = (parsed && parsed.price_range) || {};
+  if (pr.min || pr.max) {
+    const cur = pr.currency || "USD";
+    const range = (pr.min && pr.max) ? `${pr.min}-${pr.max}` : (pr.min || pr.max);
+    const u = pr.unit || "unit";
+    priceBand = `${cur} ${range}/${u}`;
+  }
+
+  body.innerHTML = `
+    <div class="sd-line"><span class="sd-label">Searching for:</span> <span class="sd-value">${escapeHtml(product)}</span></div>
+    <div class="sd-line"><span class="sd-label">In:</span> <span class="sd-value">${escapeHtml(countries)}</span></div>
+    <div class="sd-line"><span class="sd-label">Spec:</span> <span class="sd-value">${escapeHtml(spec)}</span></div>
+    <div class="sd-line"><span class="sd-label">Price band:</span> <span class="sd-value">${escapeHtml(priceBand)}</span></div>
+  `;
+
+  // --- Footer: count · trust · top pick ---------------------------------
+  const count  = data.all_suppliers.length;
+  const winner = data.winner;
+  const trust  = data.trust || "safe";
+  const tm     = TRUST_META[trust];
+
+  const trustHtml = tm
+    ? `<span class="sd-trust sd-trust-${trust}" title="${escapeHtml(tm.sub)}">${tm.icon} ${escapeHtml(tm.label)}</span>`
+    : "";
+
+  // Respect the recommendation verdict in the top-pick line
+  const decision = data.decision || "recommended";
+  const isRec = decision === "recommended";
+  const topPickLabel = isRec ? "Top pick" : "Closest match";
+  const topPickHtml = winner
+    ? `<span class="sd-toppick">${topPickLabel}: <strong>${escapeHtml(winner.name)}</strong> <span class="sd-toppick-country">(${escapeHtml(winner.country)})</span></span>`
+    : "";
+
+  const verdictBadge = isRec
+    ? ""
+    : `<span class="sd-verdict sd-verdict-warn">Not recommended — review alternatives</span>`;
+
+  const partialBadge = data.partial
+    ? `<span class="sd-partial" title="Partial result: AI cross-check was skipped to stay within the time budget.">⚠ Partial</span>`
+    : "";
+
+  footer.innerHTML = `
+    <span class="sd-count"><strong>${count}</strong> suppliers found</span>
+    <span class="sd-sep">·</span>
+    ${trustHtml}
+    <span class="sd-sep">·</span>
+    ${topPickHtml}
+    ${verdictBadge ? `<span class="sd-sep">·</span>${verdictBadge}` : ""}
+    ${partialBadge ? `<span class="sd-sep">·</span>${partialBadge}` : ""}
+  `;
+}
+
+
+// ---------------------------------------------------------------------------
+// Main results renderer — search details + Top 3 + All Suppliers
+// ---------------------------------------------------------------------------
+
 function renderResults(data) {
-  const { winner, top3, all_suppliers, explanation, risk_note, symbol, fx, decision, trust } = data;
+  const { winner, top3, all_suppliers, explanation, risk_note, symbol, fx, decision, trust, partial, trace, parsed } = data;
   _lastSymbol = symbol; _lastFx = fx;
 
   document.getElementById("all-suppliers-count").textContent = `${all_suppliers.length}`;
 
-  // Winner badge
-  const badge = document.getElementById("winner-badge");
-  const isRec = (decision || "recommended") === "recommended";
-  badge.textContent = isRec ? "Recommended" : "Not Recommended";
-  badge.classList.toggle("winner-badge-not-recommended", !isRec);
-
-  // Trust signal banner — authoritative verdict
-  const trustBanner = document.getElementById("trust-banner");
-  if (trust && TRUST_META[trust]) {
-    const m = TRUST_META[trust];
-    const conf = dataConfidence(winner);
-    trustBanner.style.display = "";
-    trustBanner.className = `trust-banner trust-banner-${trust}`;
-    document.getElementById("trust-icon").textContent  = m.icon;
-    document.getElementById("trust-title").textContent = m.label;
-    document.getElementById("trust-sub").innerHTML     =
-      `${escapeHtml(m.sub)} <span class="data-conf ${conf.cls}">Confidence: ${conf.level}</span>`;
-  } else {
-    trustBanner.style.display = "none";
+  // Debug trace: surface via window for console inspection when ?debug=1.
+  if (trace) {
+    window._mmLastTrace = trace;
+    console.info("[mm] trace:", trace);
   }
 
-  // Winner card
-  document.getElementById("winner-name").textContent       = winner.name;
-  const winnerUrlEl = document.getElementById("winner-url");
-  if (winnerUrlEl) {
-    winnerUrlEl.innerHTML = winner.url ? `<a href="${winner.url}" target="_blank" rel="noopener">${winner.url}</a>` : "";
-  }
-  document.getElementById("winner-explanation").textContent = explanation;
-  document.getElementById("winner-risk-note").textContent   = risk_note;
-  document.getElementById("winner-price").textContent = winner.price_usd ? formatPrice(winner.price_usd, symbol, fx) : "—";
-  const winnerScoreEl = document.getElementById("winner-score");
-  winnerScoreEl.innerHTML = valueScoreHTML(winner);
-  document.getElementById("winner-country").outerHTML =
-    `<span class="country-tag ${winner.country === "India" ? "tag-india" : winner.country === "China" ? "tag-china" : "tag-unknown"}" id="winner-country">${winner.country}</span>`;
+  // Search details panel — chat-thread style recap of what the user asked.
+  // Also renders the count + global trust verdict + top-pick mention, plus
+  // the partial-results warning (which used to sit on the winner card).
+  renderSearchDetails(parsed, data);
 
-  const riskEl = document.getElementById("winner-risk");
-  riskEl.textContent = winner.risk_level;
-  riskEl.className   = `kpi-value ${riskClass(winner.risk_level)}`;
+  // Market reference banner — macro price context above All Suppliers.
+  renderMarketReferenceBanner(data.market_reference, symbol);
 
-  const winnerAnomaliesEl = document.getElementById("winner-anomalies");
-  if (winnerAnomaliesEl) winnerAnomaliesEl.innerHTML = anomaliesHTML(winner.anomalies);
+  // Canonical unit from the market reference (used to label per-supplier
+  // estimates when the supplier had no extracted price/unit of its own).
+  const fallbackUnit = data.market_reference ? data.market_reference.unit : null;
 
-  const winnerSaveBtn = document.getElementById("winner-save-btn");
-  if (winnerSaveBtn) {
-    winnerSaveBtn.textContent = "Save to My Suppliers";
-    winnerSaveBtn.disabled = false;
-    winnerSaveBtn.classList.remove("saved");
-    winnerSaveBtn.dataset.supplierName = winner.name;
-    winnerSaveBtn.dataset.supplierUrl = winner.url || "";
-    winnerSaveBtn.onclick = () => saveSupplier(winner, winnerSaveBtn);
-  }
-
-  // Winner AI Insight (on-demand)
-  const winnerInsight = document.getElementById("winner-ai-insight");
-  if (winnerInsight) {
-    winnerInsight.open = false;
-    const container = winnerInsight.querySelector(".ai-insight-container");
-    container.innerHTML = "";
-    let winnerInsightLoaded = false;
-    winnerInsight.ontoggle = () => {
-      if (winnerInsight.open && !winnerInsightLoaded) {
-        winnerInsightLoaded = true;
-        fetchInsight(winner, container);
-      }
-    };
-  }
-
-  // Top 3 cards
+  // Top 3 cards — #1 gets the 🏆 Top Pick treatment (highlighted border +
+  // badge) and a "Why this pick?" collapsible that carries the explanation
+  // narrative that used to live on the now-deleted winner card.
   const top3Container = document.getElementById("top3-cards");
   top3Container.innerHTML = "";
   top3.forEach((s, idx) => {
-    const rankClass = idx === 0 ? "rank-1" : idx === 1 ? "rank-2" : "";
+    const rankClass = idx === 0 ? "rank-1 top-pick" : idx === 1 ? "rank-2" : "";
+    const isTopPick = (idx === 0);
+    const decision  = data.decision || "recommended";
+
+    const rankBadge = isTopPick
+      ? `<div class="card-top-pick-badge">🏆 ${decision === "recommended" ? "TOP PICK" : "CLOSEST MATCH"}</div>`
+      : `<div class="card-rank">${idx + 1}</div>`;
+
+    const whyThisPick = isTopPick && explanation
+      ? `<details class="why-this-pick">
+           <summary>Why this pick?</summary>
+           <div class="why-this-pick-body">${escapeHtml(explanation).replace(/\*\*/g, '')}</div>
+         </details>`
+      : "";
+
     const card = document.createElement("div");
     card.className = `supplier-card ${rankClass}`;
     card.innerHTML = `
-      <div class="card-rank">${idx + 1}</div>
+      ${rankBadge}
       <div class="card-name">${s.name}</div>
       <div class="card-meta">
         ${countryTag(s.country)}
         ${trustBadgeHTML(s.trust)}
         ${confidenceHTML(s)}
+        ${angleChipHTML(s)}
       </div>
       <div class="card-stats">
-        <div><div class="card-stat-label">Est. Price</div><div class="card-stat-value">${s.price_usd ? formatPrice(s.price_usd, symbol, fx) : "—"}</div></div>
+        <div><div class="card-stat-label">Est. Price</div><div class="card-stat-value">${renderPriceCell(s, symbol, fx, fallbackUnit)}</div></div>
         <div><div class="card-stat-label">Risk</div><div class="card-stat-value ${riskClass(s.risk_level)}">${s.risk_level}</div></div>
         <div><div class="card-stat-label">Value Score</div><div class="card-stat-value">${valueScoreHTML(s)}</div></div>
       </div>
       <div class="card-url"><a href="${s.url}" target="_blank" rel="noopener">${s.url}</a></div>
       ${anomaliesHTML(s.anomalies)}
+      ${whyThisPick}
       <details class="card-risk-details"><summary>Risk Details</summary><ul class="risk-reasons">${riskReasonsList(s.risk_reasons)}</ul></details>
       <details class="ai-insight" data-supplier="${escapeHtml(s.name)}">
         <summary>AI Insight</summary>
@@ -562,9 +778,9 @@ function renderResults(data) {
     tr.className = `supplier-row ${idx === 0 ? "winner-row" : ""}`;
     tr.innerHTML = `
       <td><span class="rank-badge ${idx === 0 ? "r1" : idx === 1 ? "r2" : ""}">${s.rank}</span></td>
-      <td>${s.name} ${trustBadgeHTML(s.trust)}</td>
+      <td>${s.name} ${trustBadgeHTML(s.trust)} ${angleChipHTML(s)}</td>
       <td>${countryTag(s.country)}</td>
-      <td>${s.price_usd ? formatPrice(s.price_usd, symbol, fx) : "—"}</td>
+      <td>${renderPriceCell(s, symbol, fx, fallbackUnit)}</td>
       <td class="${riskClass(s.risk_level)}">${s.risk_level}</td>
       <td>${valueScoreHTML(s)}</td>
       <td><a href="${s.url}" target="_blank" rel="noopener" style="font-size:12px" onclick="event.stopPropagation()">${new URL(s.url).hostname}</a></td>
@@ -631,7 +847,173 @@ function renderResults(data) {
 
 
 // ---------------------------------------------------------------------------
-// Main: single unified analysis
+// Chat-driven flow: parse query → preview → confirm → run analysis
+// ---------------------------------------------------------------------------
+
+// Holds the most-recently-parsed query while the parse-preview UI is visible.
+let _pendingParsed = null;
+
+function fillChatExample(btn) {
+  const input = document.getElementById("chat-input");
+  if (input && btn) {
+    input.value = btn.textContent.trim();
+    input.focus();
+  }
+}
+
+function cancelParse() {
+  _pendingParsed = null;
+  hide("parse-preview");
+  hide("clarification");
+  show("chat-form");
+  show("chat-examples-row");
+}
+
+function show(id) { const el = document.getElementById(id); if (el) el.style.display = ""; }
+function hide(id) { const el = document.getElementById(id); if (el) el.style.display = "none"; }
+
+async function runChatSearch(ev) {
+  if (ev && ev.preventDefault) ev.preventDefault();
+  const inp = document.getElementById("chat-input");
+  const q   = (inp && inp.value || "").trim();
+  if (!q) return;
+
+  // Step 1: parse-only call. Cheap (no Serper), shows what the model heard.
+  const sendBtn = document.getElementById("chat-send");
+  if (sendBtn) sendBtn.disabled = true;
+  try {
+    const resp = await fetch("/api/parse", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ query: q }),
+    });
+    if (!resp.ok) {
+      showError("Could not parse the request. Please try again.");
+      return;
+    }
+    const data = await resp.json();
+    const parsed = data.parsed || {};
+    if (parsed.needs_clarification && parsed.clarification_question) {
+      _pendingParsed = parsed;
+      const cEl = document.getElementById("clarification-text");
+      if (cEl) cEl.textContent = parsed.clarification_question;
+      hide("chat-form");
+      show("clarification");
+      return;
+    }
+    _pendingParsed = parsed;
+    renderParsePreview(parsed);
+    hide("chat-form");
+    show("parse-preview");
+  } catch (e) {
+    showError("Could not reach the server. Make sure the backend is running.");
+  } finally {
+    if (sendBtn) sendBtn.disabled = false;
+  }
+}
+
+function renderParsePreview(parsed) {
+  const src = document.getElementById("parse-source");
+  if (src) src.textContent = `parsed by ${parsed.source || "rules"}`;
+
+  const grid = document.getElementById("parse-fields");
+  if (!grid) return;
+
+  const fields = [
+    ["Category",   parsed.category || "any",  "category"],
+    ["Material",   parsed.material || "—",    "material"],
+    ["Variant",    parsed.variant  || "—",    "variant"],
+    ["Countries",  (parsed.countries && parsed.countries.length) ? parsed.countries.join(", ") : "global", "countries"],
+    ["Spec",       parsed.spec     || "—",    "spec"],
+  ];
+  const pr = parsed.price_range || {};
+  if (pr.min || pr.max || pr.currency || pr.unit) {
+    const cur = pr.currency || "USD";
+    const amt = pr.min && pr.max ? `${pr.min}-${pr.max}` : (pr.min || pr.max || "?");
+    const u   = pr.unit || "unit";
+    fields.push(["Price band", `${cur} ${amt}/${u}`, "price"]);
+  }
+  grid.innerHTML = fields.map(([label, val, key]) =>
+    `<div class="parse-field">
+       <span class="parse-field-label">${escapeHtml(label)}</span>
+       <span class="parse-field-val" data-key="${key}" contenteditable="true"
+             onblur="updateParseField('${key}', this.textContent)">${escapeHtml(val)}</span>
+     </div>`
+  ).join("");
+}
+
+function updateParseField(key, value) {
+  if (!_pendingParsed) return;
+  const v = String(value || "").trim();
+  if (key === "category") {
+    _pendingParsed.category = v.toLowerCase();
+  } else if (key === "material" || key === "variant" || key === "spec") {
+    _pendingParsed[key] = v;
+  } else if (key === "countries") {
+    _pendingParsed.countries = v && v !== "global"
+      ? v.split(",").map(s => s.trim()).filter(Boolean)
+      : [];
+  } else if (key === "price") {
+    // Best-effort parse of "USD 800-900/ton"
+    const m = v.match(/([A-Z]{3})\s*(\d+(?:\.\d+)?)(?:[-–to](\d+(?:\.\d+)?))?\s*\/?\s*(\w+)?/i);
+    if (m) {
+      _pendingParsed.price_range = {
+        currency: (m[1] || "USD").toUpperCase(),
+        min:      parseFloat(m[2]),
+        max:      m[3] ? parseFloat(m[3]) : null,
+        unit:     (m[4] || "").toLowerCase() || null,
+      };
+    }
+  }
+}
+
+async function confirmParseAndSearch() {
+  if (!_pendingParsed) return;
+  hide("parse-preview");
+  hide("clarification");
+  hide("chat-form");
+  showLoading();
+
+  let apiDone = false, animDone = false, apiResult = null, apiError = null;
+  animateProgress(() => {
+    animDone = true;
+    if (apiDone) finalize(apiResult, apiError);
+  });
+
+  try {
+    const resp = await fetch("/api/analyze", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        max_results: 10,
+        parsed: _pendingParsed,
+        debug:  isDebugMode(),
+      }),
+    });
+    if (!resp.ok) {
+      const err = await resp.json().catch(() => ({}));
+      apiError = err.detail || `Server error (${resp.status})`;
+    } else {
+      apiResult = await resp.json();
+    }
+  } catch (_) {
+    apiError = "Could not reach the server. Make sure the backend is running.";
+  }
+  apiDone = true;
+  if (animDone) finalize(apiResult, apiError);
+}
+
+function isDebugMode() {
+  try {
+    const params = new URLSearchParams(window.location.search);
+    if (params.get("debug") === "1") return true;
+  } catch (_) {}
+  return !!window._mmDebug;
+}
+
+
+// ---------------------------------------------------------------------------
+// Main: single unified analysis (legacy ACP button, kept for back-compat)
 // ---------------------------------------------------------------------------
 
 async function runAnalysis() {

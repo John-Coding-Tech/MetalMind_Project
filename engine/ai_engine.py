@@ -9,18 +9,17 @@ Never consumes any expert-system score or output.
 Public API:
     call_model(prompt: str, images: list[bytes] | None = None) -> str
         Isolated HTTP caller. Optionally passes JPEG image bytes as
-        multimodal inline_data parts so Gemma 3 can "see" them.
+        multimodal inline_data parts so Gemma can "see" them.
         Swap this out to change the model.
     ai_evaluate(supplier: SupplierRecord) -> dict
         Returns {score, decision, risk_score, reasons, risk_flags}.
 
 Determinism: temperature is fixed at 0.
-Robustness : any failure (HTTP / JSON / schema) returns the fallback dict.
+Robustness : any failure (HTTP / JSON / schema) returns the fallback dict.F
 
 Environment variables:
     GEMMA_API_KEY   — required; Google AI Studio API key
     GEMMA_MODEL     — optional; defaults to "gemma-3-27b-it"
-                      (set to "gemma-4-..." when Gemma 4 becomes available)
     GEMMA_TIMEOUT   — optional; HTTP timeout in seconds (default 60)
 """
 
@@ -78,7 +77,7 @@ def call_model(prompt: str, images: list[bytes] | None = None) -> str:
 
     If `images` is provided, each entry is JPEG-encoded bytes; they are
     base64-embedded alongside the prompt via Gemini's `inline_data` part
-    schema so Gemma 3 can read them with its vision capability.
+    schema so Gemma can read them with its vision capability.
 
     Retries up to GEMMA_MAX_ATTEMPTS times on network errors, HTTP 429,
     and HTTP 5xx, with exponential backoff (1s, 2s, 4s).
@@ -144,6 +143,52 @@ def call_model(prompt: str, images: list[bytes] | None = None) -> str:
             return ""
 
     return ""
+
+
+def call_model_fast(prompt: str, timeout: float = 5.0,
+                    max_output_tokens: int = 256,
+                    json_mode: bool = False) -> str:
+    """
+    Latency-tight Gemma call for paths that have a deterministic fallback
+    (e.g. the chat query parser, which falls back to regex on any failure).
+
+    No retries, short timeout — if Gemma is slow or down we want to know
+    in seconds, not the 30-90s worst case of `call_model`. The default
+    output cap (256) is sized for short structured outputs like the
+    parser's JSON; bump it explicitly if you need more.
+
+    `json_mode=True` sets responseMimeType: application/json, which forces
+    the model to emit raw JSON without its usual Markdown reasoning
+    preamble. Required for gemma-* models, which otherwise ignore
+    "output JSON only" instructions.
+
+    Returns "" on any error so the caller's fallback fires immediately.
+    """
+    if not _REQUESTS_OK or not _GEMMA_API_KEY:
+        return ""
+    gen_config: dict = {"temperature": 0, "maxOutputTokens": max_output_tokens}
+    if json_mode:
+        gen_config["responseMimeType"] = "application/json"
+    try:
+        resp = _requests.post(
+            f"{_GEMMA_API_URL}?key={_GEMMA_API_KEY}",
+            json={
+                "contents": [{"parts": [{"text": prompt}]}],
+                "generationConfig": gen_config,
+            },
+            timeout=timeout,
+        )
+        if not resp.ok:
+            return ""
+        candidates = resp.json().get("candidates", [])
+        if not candidates:
+            return ""
+        parts = candidates[0].get("content", {}).get("parts", [])
+        if not parts:
+            return ""
+        return parts[0].get("text", "").strip()
+    except Exception:
+        return ""
 
 
 # ---------------------------------------------------------------------------

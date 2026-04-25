@@ -3087,3 +3087,449 @@ body.modal-open { overflow: hidden; }
   color: #b91c1c;
   background: rgba(239, 68, 68, 0.08);
 }
+
+/* ==================================================================
+   Chat-driven landing UI (replaces "Run Analysis" button)
+   ================================================================== */
+
+.chat-form {
+  display: flex;
+  align-items: stretch;
+  gap: 0.5rem;
+  width: 100%;
+  max-width: 720px;
+  margin: 0 auto;
+  padding: 0.5rem;
+  background: #fff;
+  border: 1px solid #e5e7eb;
+  border-radius: 14px;
+  box-shadow: 0 4px 20px rgba(0, 0, 0, 0.04), 0 1px 2px rgba(0, 0, 0, 0.04);
+  transition: box-shadow 0.18s, border-color 0.18s;
+}
+.chat-form:focus-within {
+  border-color: #6366f1;
+  box-shadow: 0 6px 28px rgba(99, 102, 241, 0.15);
+}
+.chat-input {
+  flex: 1;
+  border: none;
+  outline: none;
+  resize: none;
+  font: inherit;
+  font-size: 1rem;
+  padding: 0.65rem 0.75rem;
+  background: transparent;
+  color: #111827;
+  line-height: 1.4;
+  max-height: 120px;
+}
+.chat-input::placeholder {
+  color: #9ca3af;
+}
+.chat-send {
+  flex-shrink: 0;
+  width: 44px; height: 44px;
+  border: none;
+  border-radius: 10px;
+  background: linear-gradient(135deg, #6366f1, #8b5cf6);
+  color: #fff;
+  cursor: pointer;
+  font-size: 1.2rem;
+  display: flex; align-items: center; justify-content: center;
+  transition: transform 0.12s, box-shadow 0.18s, opacity 0.15s;
+}
+.chat-send:hover { transform: translateY(-1px); box-shadow: 0 6px 18px rgba(99, 102, 241, 0.35); }
+.chat-send:disabled { opacity: 0.45; cursor: wait; }
+
+.chat-examples {
+  display: flex;
+  gap: 0.5rem;
+  flex-wrap: wrap;
+  justify-content: center;
+  margin-top: 0.85rem;
+  max-width: 720px;
+}
+.chat-example {
+  font: inherit;
+  font-size: 0.8rem;
+  color: #4b5563;
+  background: #f3f4f6;
+  border: 1px solid #e5e7eb;
+  border-radius: 999px;
+  padding: 0.3rem 0.75rem;
+  cursor: pointer;
+  transition: background 0.15s, color 0.15s, border-color 0.15s;
+}
+.chat-example:hover {
+  background: #eef2ff;
+  border-color: #c7d2fe;
+  color: #4338ca;
+}
+
+/* ---------- Parse preview --------------------------------------- */
+.parse-preview {
+  width: 100%;
+  max-width: 720px;
+  margin: 1.25rem auto 0;
+  padding: 1rem 1.1rem;
+  background: #fafbff;
+  border: 1px solid #e0e7ff;
+  border-radius: 12px;
+}
+.parse-preview-head {
+  display: flex; align-items: baseline; justify-content: space-between;
+  margin-bottom: 0.65rem;
+}
+.parse-preview-title {
+  font-weight: 600; color: #1f2937; font-size: 0.95rem;
+}
+.parse-preview-source {
+  font-size: 0.7rem; color: #6366f1;
+  background: #eef2ff;
+  padding: 0.15rem 0.45rem;
+  border-radius: 999px;
+}
+.parse-preview-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+  gap: 0.45rem 0.85rem;
+  margin-bottom: 0.85rem;
+}
+.parse-field {
+  display: flex; flex-direction: column;
+  background: #fff;
+  padding: 0.45rem 0.6rem;
+  border-radius: 8px;
+  border: 1px solid #e5e7eb;
+}
+.parse-field-label {
+  font-size: 0.7rem; color: #6b7280; text-transform: uppercase; letter-spacing: 0.04em;
+}
+.parse-field-val {
+  font-size: 0.92rem; color: #111827; min-height: 1.35rem; outline: none;
+  border-bottom: 1px dashed transparent;
+  transition: border-color 0.15s;
+}
+.parse-field-val:focus { border-bottom-color: #6366f1; }
+.parse-preview-actions { display: flex; gap: 0.6rem; }
+
+/* ---------- Clarification (LLM guardrail) ----------------------- */
+.clarification {
+  width: 100%;
+  max-width: 640px;
+  margin: 1.25rem auto 0;
+  padding: 1rem 1.1rem;
+  background: #fffbeb;
+  border: 1px solid #fde68a;
+  border-radius: 12px;
+  display: flex; flex-direction: column; align-items: center;
+  gap: 0.6rem;
+}
+.clarification-icon { font-size: 1.4rem; }
+.clarification-text { color: #92400e; font-size: 0.95rem; text-align: center; margin: 0; }
+
+/* ---------- Multi-unit price (est.) tag ------------------------- */
+.unit-est {
+  font-size: 0.7em;
+  margin-left: 0.25em;
+  padding: 0.05em 0.35em;
+  border-radius: 4px;
+  background: #fef3c7;
+  color: #92400e;
+  font-weight: 500;
+}
+.unit-est-keyword { background: #fef3c7; color: #92400e; }   /* medium confidence */
+.unit-est-category { background: #fee2e2; color: #991b1b; }  /* low confidence */
+
+/* ---------- Multi-angle trust chip ----------------------------- */
+.angle-chip {
+  display: inline-block;
+  font-size: 0.7rem;
+  padding: 0.12rem 0.45rem;
+  border-radius: 999px;
+  margin-left: 0.35rem;
+  font-weight: 600;
+  vertical-align: middle;
+}
+.angle-chip-high { background: #d1fae5; color: #065f46; }
+.angle-chip-med  { background: #e0e7ff; color: #3730a3; }
+.angle-chip-low  { background: #f3f4f6; color: #6b7280; }
+
+/* ---------- Score breakdown hover (uses native title) ---------- */
+.value-score { cursor: help; border-bottom: 1px dotted #9ca3af; }
+
+/* ---------- Partial-results banner (budget exhausted) ---------- */
+.partial-banner {
+  background: #fef3c7;
+  border: 1px solid #fde68a;
+  color: #92400e;
+  padding: 0.55rem 0.85rem;
+  border-radius: 8px;
+  font-size: 0.88rem;
+  margin-bottom: 0.85rem;
+}
+
+/* "Quote on request" — for suppliers that don't publish prices online.
+   Visually subtle so it doesn't compete with real numbers, but readable. */
+.price-rfq {
+  font-size: 0.85em;
+  color: #6b7280;
+  font-style: italic;
+  font-weight: 400;
+  cursor: help;
+}
+
+/* ==================================================================
+   Search details panel — replaces the winner card (Context > Decision > Data)
+   ================================================================== */
+.search-details {
+  background: linear-gradient(135deg, #fafbff 0%, #f3f4ff 100%);
+  border: 1px solid #e0e7ff;
+  border-radius: 14px;
+  padding: 1.1rem 1.4rem;
+  margin-bottom: 1.6rem;
+}
+.search-details-head {
+  display: flex;
+  align-items: center;
+  gap: 0.6rem;
+  margin-bottom: 0.9rem;
+  padding-bottom: 0.8rem;
+  border-bottom: 1px solid rgba(99, 102, 241, 0.15);
+}
+.search-details-icon {
+  font-size: 1.2rem;
+}
+.search-details-title {
+  font-weight: 600;
+  color: #3730a3;
+  font-size: 0.9rem;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  flex: 1;
+}
+.search-details-edit {
+  color: #6366f1;
+  font-size: 0.85rem;
+  text-decoration: none;
+  font-weight: 500;
+  padding: 0.25rem 0.6rem;
+  border-radius: 6px;
+  transition: background 0.15s;
+}
+.search-details-edit:hover {
+  background: rgba(99, 102, 241, 0.08);
+  text-decoration: underline;
+}
+.search-details-body {
+  display: flex;
+  flex-direction: column;
+  gap: 0.35rem;
+  font-size: 0.98rem;
+  color: #111827;
+  line-height: 1.55;
+  margin-bottom: 1rem;
+}
+.sd-line { padding: 0.1rem 0; }
+.sd-label {
+  color: #6b7280;
+  font-weight: 500;
+  display: inline-block;
+  min-width: 115px;
+}
+.sd-value {
+  color: #111827;
+  font-weight: 500;
+}
+.search-details-footer {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  flex-wrap: wrap;
+  padding-top: 0.85rem;
+  border-top: 1px solid rgba(99, 102, 241, 0.15);
+  font-size: 0.88rem;
+  color: #4b5563;
+}
+.sd-sep { color: #d1d5db; font-weight: 300; }
+.sd-count strong { color: #111827; font-size: 1rem; }
+.sd-trust {
+  padding: 0.22rem 0.55rem;
+  border-radius: 999px;
+  font-weight: 600;
+  font-size: 0.76rem;
+  letter-spacing: 0.02em;
+}
+.sd-trust-safe    { background: #d1fae5; color: #065f46; }
+.sd-trust-warning { background: #fef3c7; color: #92400e; }
+.sd-trust-risk    { background: #fee2e2; color: #991b1b; }
+.sd-toppick { color: #4b5563; }
+.sd-toppick strong { color: #111827; }
+.sd-toppick-country { color: #6b7280; font-weight: 400; }
+.sd-verdict-warn {
+  background: #fef3c7;
+  color: #92400e;
+  padding: 0.2rem 0.55rem;
+  border-radius: 999px;
+  font-size: 0.76rem;
+  font-weight: 600;
+}
+.sd-partial {
+  background: #fed7aa;
+  color: #9a3412;
+  padding: 0.2rem 0.55rem;
+  border-radius: 999px;
+  font-size: 0.76rem;
+  font-weight: 600;
+  cursor: help;
+}
+
+/* ==================================================================
+   Top Pick treatment on #1 card + Why-this-pick collapsible
+   ================================================================== */
+.supplier-card.top-pick {
+  border: 2px solid #f59e0b;
+  box-shadow: 0 10px 32px rgba(245, 158, 11, 0.18), 0 2px 6px rgba(0,0,0,0.04);
+  position: relative;
+}
+.card-top-pick-badge {
+  display: inline-block;
+  background: linear-gradient(135deg, #f59e0b, #eab308);
+  color: #fff;
+  padding: 0.3rem 0.75rem;
+  border-radius: 999px;
+  font-size: 0.72rem;
+  font-weight: 700;
+  letter-spacing: 0.06em;
+  box-shadow: 0 2px 6px rgba(245, 158, 11, 0.35);
+  margin-bottom: 0.5rem;
+}
+
+.why-this-pick {
+  margin-top: 0.85rem;
+  background: #fffbeb;
+  border: 1px solid #fde68a;
+  border-radius: 8px;
+  padding: 0.55rem 0.8rem;
+}
+.why-this-pick summary {
+  cursor: pointer;
+  color: #92400e;
+  font-weight: 600;
+  font-size: 0.9rem;
+  list-style: none;
+  outline: none;
+}
+.why-this-pick summary::before {
+  content: "💡 ";
+  margin-right: 0.15rem;
+}
+.why-this-pick[open] summary {
+  margin-bottom: 0.55rem;
+  padding-bottom: 0.5rem;
+  border-bottom: 1px solid #fde68a;
+}
+.why-this-pick-body {
+  color: #4b5563;
+  font-size: 0.9rem;
+  line-height: 1.6;
+  white-space: pre-wrap;
+}
+
+
+/* ==================================================================
+   Hybrid pricing (path C): market banner + per-supplier estimate
+   + range-status badges. Layered visually so real prices dominate
+   and model estimates read as clearly secondary.
+   ================================================================== */
+
+/* --- Market reference banner --------------------------------------- */
+.market-reference {
+  background: linear-gradient(135deg, #f0f9ff 0%, #e0f2fe 100%);
+  border: 1px solid #bae6fd;
+  border-radius: 12px;
+  padding: 0.85rem 1.1rem;
+  margin-bottom: 1rem;
+  display: flex;
+  flex-direction: column;
+  gap: 0.4rem;
+}
+.market-reference-row {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  flex-wrap: wrap;
+}
+.market-reference-icon {
+  font-size: 1.15rem;
+}
+.market-reference-label {
+  color: #0369a1;
+  font-weight: 600;
+  font-size: 0.85rem;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+.market-reference-range {
+  color: #0c4a6e;
+  font-size: 1.1rem;
+}
+.market-reference-range strong {
+  color: #0c4a6e;
+  font-weight: 700;
+}
+.market-reference-samples {
+  font-size: 0.82rem;
+  color: #075985;
+}
+.market-reference-disclaimer {
+  margin: 0;
+  font-size: 0.72rem;
+  color: #64748b;
+  font-style: italic;
+  padding-top: 0.35rem;
+  border-top: 1px dashed #bae6fd;
+}
+
+/* --- Per-supplier model estimate (ONLY when no real price) -------- */
+/* Visually SECONDARY to the "Quote on request" line above it: grey,
+   smaller, with an amber "⚠ model" tag that's always visible.       */
+.price-estimate {
+  margin-top: 0.3rem;
+  font-size: 0.78rem;
+  color: #6b7280;
+  line-height: 1.35;
+  display: flex;
+  align-items: center;
+  gap: 0.35rem;
+  flex-wrap: wrap;
+}
+.price-estimate-label {
+  font-variant-numeric: tabular-nums;
+}
+.price-estimate-warn {
+  background: #fef3c7;
+  color: #92400e;
+  padding: 0.08rem 0.38rem;
+  border-radius: 6px;
+  font-size: 0.68rem;
+  font-weight: 600;
+  letter-spacing: 0.02em;
+  cursor: help;
+  white-space: nowrap;
+}
+
+/* --- Range status badges (on REAL prices) ------------------------- */
+.price-range-badge {
+  display: inline-block;
+  margin-left: 0.4rem;
+  padding: 0.12rem 0.45rem;
+  border-radius: 999px;
+  font-size: 0.72rem;
+  font-weight: 600;
+  white-space: nowrap;
+}
+.price-range-badge.pr-within    { background: #d1fae5; color: #065f46; }
+.price-range-badge.pr-above     { background: #fef3c7; color: #92400e; }
+.price-range-badge.pr-far-above { background: #fee2e2; color: #991b1b; }
+.price-range-badge.pr-low       { background: #fee2e2; color: #991b1b; }

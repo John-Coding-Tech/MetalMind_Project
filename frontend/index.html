@@ -37,21 +37,48 @@
 
           <section class="landing-hero">
             <h1 class="landing-title">
-              Find the <span class="accent-grad">best-value, lowest-risk</span> ACP supplier
+              Find the <span class="accent-grad">best-value, lowest-risk</span> Metal supplier
             </h1>
           </section>
 
           <section class="landing-action">
             <p class="landing-sub">
-              Rule engine ranks suppliers. AI cross-checks the winner.
+              Tell us what you need. AI parses your request and cross-checks the top supplier.
             </p>
-            <div class="landing-action-row">
-              <button type="button" class="run-btn" id="run-btn" onclick="runAnalysis()">
-                <span class="run-btn-text">Run AI Cross-Checks Analysis</span>
-                <span class="run-btn-arrow">→</span>
+            <form class="chat-form" id="chat-form" onsubmit="runChatSearch(event); return false;">
+              <textarea class="chat-input" id="chat-input" rows="1"
+                        placeholder="e.g. 6061 aluminum sheet from Vietnam under USD 4000/ton"
+                        autocomplete="off" required></textarea>
+              <button type="submit" class="chat-send" id="chat-send" aria-label="Search">
+                <span class="chat-send-arrow">&#8594;</span>
               </button>
+            </form>
+            <div class="chat-examples">
+              <button type="button" class="chat-example" onclick="fillChatExample(this)">304 stainless steel sheet from Korea, 2mm</button>
+              <button type="button" class="chat-example" onclick="fillChatExample(this)">PVDF coated ACP, marble finish, China</button>
+              <button type="button" class="chat-example" onclick="fillChatExample(this)">A36 carbon steel coil, USD 700-900/ton</button>
             </div>
           </section>
+
+          <!-- Parse preview (shown after parsing, before search) -->
+          <div id="parse-preview" class="parse-preview" style="display:none;">
+            <div class="parse-preview-head">
+              <span class="parse-preview-title">We understood your request as:</span>
+              <span class="parse-preview-source" id="parse-source"></span>
+            </div>
+            <div class="parse-preview-grid" id="parse-fields"></div>
+            <div class="parse-preview-actions">
+              <button type="button" class="btn-primary" onclick="confirmParseAndSearch()">Search</button>
+              <button type="button" class="btn-secondary" onclick="cancelParse()">Edit query</button>
+            </div>
+          </div>
+
+          <!-- LLM clarification prompt (shown when query is too vague) -->
+          <div id="clarification" class="clarification" style="display:none;">
+            <div class="clarification-icon">&#x1F4AC;</div>
+            <p class="clarification-text" id="clarification-text"></p>
+            <button type="button" class="btn-secondary" onclick="cancelParse()">Try again</button>
+          </div>
 
           <button type="button" class="principle-link" id="principle-badge">
             ⚖️ Risk &gt; Price principle · <span>Learn more →</span>
@@ -80,56 +107,18 @@
             <a href="/my-suppliers" class="nav-my-suppliers">My Suppliers</a>
           </div>
 
-          <!-- Winner card -->
-          <section class="card winner-card" id="winner-card">
-            <div class="winner-card-head">
-              <span class="results-mode-pill" id="results-mode-pill">
-                <span class="results-mode-pill-icon">⚖️</span>
-                <span class="results-mode-pill-text">MetalMind Analysis</span>
-              </span>
-              <span class="winner-badge" id="winner-badge">Recommended</span>
+          <!-- Search details — replaces winner card, carries chat context through -->
+          <section class="search-details" id="search-details">
+            <div class="search-details-head">
+              <span class="search-details-icon">💬</span>
+              <span class="search-details-title">Your search</span>
             </div>
-
-            <div class="winner-hero">
-              <div class="winner-hero-left">
-                <h2 class="winner-name" id="winner-name"></h2>
-                <span class="country-tag" id="winner-country"></span>
-              </div>
-              <div class="winner-kpis">
-                <div class="kpi">
-                  <div class="kpi-label">Est. Price</div>
-                  <div class="kpi-value" id="winner-price"></div>
-                </div>
-                <div class="kpi">
-                  <div class="kpi-label">Risk Level</div>
-                  <div class="kpi-value" id="winner-risk"></div>
-                </div>
-                <div class="kpi">
-                  <div class="kpi-label">Value Score</div>
-                  <div class="kpi-value" id="winner-score"></div>
-                </div>
-              </div>
+            <div class="search-details-body" id="search-details-body">
+              <!-- populated by renderSearchDetails() -->
             </div>
-
-            <!-- Trust signal banner -->
-            <div class="trust-banner" id="trust-banner" style="display:none;">
-              <span class="trust-banner-icon" id="trust-icon"></span>
-              <span class="trust-banner-title" id="trust-title"></span>
-              <span class="trust-banner-sub" id="trust-sub"></span>
+            <div class="search-details-footer" id="search-details-footer">
+              <!-- populated by renderSearchDetails(): count · trust · top pick -->
             </div>
-
-            <div class="winner-url" id="winner-url"></div>
-            <p class="winner-explanation" id="winner-explanation"></p>
-            <div id="winner-anomalies"></div>
-            <details class="risk-details">
-              <summary>Risk Details</summary>
-              <pre id="winner-risk-note"></pre>
-            </details>
-            <details class="ai-insight" id="winner-ai-insight">
-              <summary>AI Insight</summary>
-              <div class="ai-insight-container"></div>
-            </details>
-            <button type="button" class="save-btn" id="winner-save-btn">Save to My Suppliers</button>
           </section>
 
           <!-- Top 3 -->
@@ -137,6 +126,19 @@
             <h3 class="section-heading">Top 3 Suppliers</h3>
             <div id="top3-cards" class="top3-grid"></div>
           </section>
+
+          <!-- Market reference banner (hybrid pricing, macro context) -->
+          <div class="market-reference" id="market-reference" style="display:none;">
+            <div class="market-reference-row">
+              <span class="market-reference-icon">&#128200;</span>
+              <span class="market-reference-label" id="market-reference-label">Market reference</span>
+              <span class="market-reference-range" id="market-reference-range"></span>
+            </div>
+            <div class="market-reference-row market-reference-samples" id="market-reference-samples"></div>
+            <p class="market-reference-disclaimer">
+              Reference band from industry midpoints adjusted for region &mdash; not a quoted price.
+            </p>
+          </div>
 
           <!-- All Suppliers -->
           <section class="results-section">

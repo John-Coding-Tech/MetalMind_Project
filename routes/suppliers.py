@@ -889,7 +889,7 @@ def _extract_plain_text(path: Path) -> str:
         return ""
 
 
-# ── Image attachments → Gemma 3 vision ──────────────────────────────────
+# ── Image attachments → Gemma vision ────────────────────────────────────
 # Images aren't turned into text here; we hand the raw pixels to Gemma's
 # multimodal endpoint. Resize + JPEG-compress first so a 4K screenshot
 # doesn't blow up the request size.

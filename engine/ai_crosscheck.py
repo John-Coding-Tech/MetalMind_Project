@@ -68,13 +68,31 @@ def _fmt_supplier_block(label: str, s: dict) -> str:
     )
 
 
+_CATEGORY_DISPLAY: dict[str, str] = {
+    "acp":             "ACP (aluminium composite panel)",
+    "aluminum":        "aluminium",
+    "steel":           "carbon steel",
+    "stainless_steel": "stainless steel",
+    "copper":          "copper",
+    "brass":           "brass",
+    "zinc":            "zinc",
+    "titanium":        "titanium",
+    "tube":            "metal tube",
+    "pipe":            "metal pipe",
+    "unknown":         "metal product",
+}
+
+
 def _build_prompt(winner: dict, alternatives: list[dict]) -> str:
     alts_text = "\n".join(
         _fmt_supplier_block(f"Alternative {i + 1}", a)
         for i, a in enumerate(alternatives)
     ) or "  (no alternatives available)"
 
-    return f"""You are an independent AUDITOR reviewing a rule-based ACP (aluminium composite panel) supplier recommendation.
+    category  = (winner.get("category") or "acp").lower()
+    cat_label = _CATEGORY_DISPLAY.get(category, "metal product")
+
+    return f"""You are an independent AUDITOR reviewing a rule-based {cat_label} supplier recommendation.
 
 A separate rule engine has already ranked suppliers and selected a winner. Your job is NOT to re-rank or re-score — it is to VALIDATE the rule engine's choice.
 

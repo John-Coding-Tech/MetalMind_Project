@@ -50,15 +50,34 @@ _FALLBACK: dict = {
 # Prompt — explicitly forbids scoring / ranking / recommendation language.
 # ---------------------------------------------------------------------------
 
+_CATEGORY_DISPLAY: dict[str, str] = {
+    "acp":             "ACP (aluminium composite panel)",
+    "aluminum":        "aluminium",
+    "steel":           "carbon steel",
+    "stainless_steel": "stainless steel",
+    "copper":          "copper",
+    "brass":           "brass",
+    "zinc":            "zinc",
+    "titanium":        "titanium",
+    "tube":            "metal tube",
+    "pipe":            "metal pipe",
+    "unknown":         "metal product",
+}
+
+
 def _build_prompt(supplier: SupplierRecord) -> str:
+    cat        = getattr(supplier, "category",   "unknown") or "unknown"
+    unit       = getattr(supplier, "price_unit", "unknown") or "unknown"
+    cat_label  = _CATEGORY_DISPLAY.get(cat, "metal product")
+    unit_label = unit if unit != "unknown" else "unit"
     price = (
         "unknown"
         if supplier.price_est is None
-        else f"${supplier.price_est:.2f}/sqm (USD)"
+        else f"${supplier.price_est:.2f}/{unit_label} (USD)"
     )
     raw = (supplier.raw_content or "")[:2000]
 
-    return f"""You are an expert procurement analyst producing EXPLANATION ONLY for an ACP (aluminium composite panel) supplier.
+    return f"""You are an expert procurement analyst producing EXPLANATION ONLY for a {cat_label} supplier.
 
 Your job is to DESCRIBE this supplier's strengths and risks. You are not the decision-maker — a separate rule engine handles scoring and ranking.
 

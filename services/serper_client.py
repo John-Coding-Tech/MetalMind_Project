@@ -25,7 +25,7 @@ import requests
 _log = logging.getLogger(__name__)
 
 _API_URL = "https://google.serper.dev/search"
-_TIMEOUT = 15
+_TIMEOUT = 7   # per-call hard cap; multi_search runs 8 calls in parallel under a 20s budget
 
 
 class SerperError(Exception):
@@ -33,11 +33,19 @@ class SerperError(Exception):
 
 
 # ---------------------------------------------------------------------------
-# TTL cache — same pattern as tavily_client
+# TTL cache — 12h. Serper is paid per query; supplier-search results barely
+# move within a day, so caching aggressively saves real money. Key is
+# normalized (lowercased, whitespace-collapsed) so equivalent phrasings hit
+# the same entry.
 # ---------------------------------------------------------------------------
 
-_CACHE_TTL = 300
+_CACHE_TTL = 12 * 60 * 60   # 12 hours
 _cache: dict[str, tuple[float, list[dict]]] = {}
+
+
+def _normalize_query_key(query: str, max_results: int) -> str:
+    norm = " ".join((query or "").lower().split())
+    return f"{norm}|{max_results}"
 
 
 def _cache_get(key: str) -> list[dict] | None:
@@ -64,7 +72,7 @@ def search(query: str, max_results: int = 10) -> list[dict[str, Any]]:
     Search via Serper (Google Search). Returns results in the unified format
     that cleaner.py expects: {title, url, content, score, source}.
     """
-    cache_key = f"{query}|{max_results}"
+    cache_key = _normalize_query_key(query, max_results)
     cached = _cache_get(cache_key)
     if cached is not None:
         _log.info("[serper] CACHE HIT  q='%s' (%d results)", query[:40], len(cached))
