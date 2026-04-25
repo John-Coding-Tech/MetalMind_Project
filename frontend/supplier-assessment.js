@@ -169,7 +169,8 @@ async function loadSupplier() {
   const urlEl = document.getElementById("assess-url");
   if (s.url) {
     const a = document.createElement("a");
-    a.href = s.url; a.target = "_blank"; a.rel = "noopener";
+    a.href = /^https?:/i.test(s.url) ? s.url : "#";
+    a.target = "_blank"; a.rel = "noopener";
     a.textContent = s.url;
     urlEl.innerHTML = "";
     urlEl.appendChild(a);
@@ -219,9 +220,9 @@ async function loadSupplier() {
     b.checked = fvs.includes(b.value);
   });
 
-  document.getElementById("coating_confirmed").value = s.coating_confirmed || "";
-  document.getElementById("core_material_confirmed").value = s.core_material_confirmed || "";
-  document.getElementById("fire_rating_confirmed").value = s.fire_rating_confirmed || "";
+  document.getElementById("reference_1").value = s.reference_1 || "";
+  document.getElementById("reference_2").value = s.reference_2 || "";
+  document.getElementById("reference_3").value = s.reference_3 || "";
   document.getElementById("warranty_years").value = s.warranty_years ?? "";
   document.getElementById("next_action_date").value = s.next_action_date || "";
 
@@ -254,9 +255,9 @@ document.addEventListener("DOMContentLoaded", () => {
   wireSimpleInput("incoterms", "incoterms");
   wireSimpleInput("sample_status", "sample_status");
   wireCheckGroup("factory-verified", "factory_verified_via");
-  wireSimpleInput("coating_confirmed", "coating_confirmed");
-  wireSimpleInput("core_material_confirmed", "core_material_confirmed");
-  wireSimpleInput("fire_rating_confirmed", "fire_rating_confirmed");
+  wireSimpleInput("reference_1", "reference_1");
+  wireSimpleInput("reference_2", "reference_2");
+  wireSimpleInput("reference_3", "reference_3");
   wireSimpleInput("warranty_years", "warranty_years", (v) => parseInt(v, 10));
   wireSimpleInput("next_action_date", "next_action_date");
 
@@ -371,13 +372,21 @@ function wireAttachments() {
 
   btn.addEventListener("click", () => input.click());
 
+  const MAX_UPLOAD_MB = 25;
+  const MAX_UPLOAD_BYTES = MAX_UPLOAD_MB * 1024 * 1024;
+
   input.addEventListener("change", async () => {
     const files = Array.from(input.files || []);
     if (!files.length || SUPPLIER_ID == null) return;
 
     btn.disabled = true;
+    let uploadedCount = 0;
     for (let i = 0; i < files.length; i++) {
       const f = files[i];
+      if (f.size > MAX_UPLOAD_BYTES) {
+        statusEl.textContent = `Skipped ${f.name}: exceeds ${MAX_UPLOAD_MB} MB limit.`;
+        continue;
+      }
       statusEl.textContent = `Uploading ${i + 1}/${files.length}: ${f.name}`;
       try {
         const form = new FormData();
@@ -388,13 +397,18 @@ function wireAttachments() {
         });
         if (!resp.ok) {
           const err = await resp.json().catch(() => ({}));
-          throw new Error(err.detail || `Upload failed (${resp.status})`);
+          statusEl.textContent = `Could not upload ${f.name}: ${err.detail || `error ${resp.status}`}`;
+          continue;
         }
+        uploadedCount++;
       } catch (e) {
-        alert(`Could not upload ${f.name}: ${e.message}`);
+        statusEl.textContent = `Could not upload ${f.name}: ${e.message}`;
+        continue;
       }
     }
-    statusEl.textContent = `Uploaded ${files.length} file${files.length === 1 ? "" : "s"}`;
+    if (uploadedCount > 0) {
+      statusEl.textContent = `Uploaded ${uploadedCount} file${uploadedCount === 1 ? "" : "s"}`;
+    }
     setTimeout(() => { statusEl.textContent = ""; }, 2500);
 
     input.value = "";       // reset so selecting the same file again re-triggers change

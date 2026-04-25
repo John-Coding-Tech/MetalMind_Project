@@ -12,7 +12,9 @@ Run:
 
 import logging
 import os
+import threading
 import time
+from collections import OrderedDict
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
@@ -21,10 +23,12 @@ _log = logging.getLogger(__name__)
 from dotenv import load_dotenv
 load_dotenv()
 
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, HTTPException, Request
+from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
-from fastapi.responses import FileResponse
 from pydantic import BaseModel, Field
+from starlette.middleware.base import BaseHTTPMiddleware
 
 from services.search import search_suppliers as multi_search
 from services.multi_search import multi_search_and_merge
@@ -52,8 +56,47 @@ from routes.suppliers import router as suppliers_router
 
 app = FastAPI(title="MetalMind API")
 
+# ---------------------------------------------------------------------------
+# Middleware — security headers and CORS
+# ---------------------------------------------------------------------------
+
+_CORS_ORIGIN = os.environ.get("CORS_ALLOW_ORIGIN", "*")
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=[_CORS_ORIGIN] if _CORS_ORIGIN != "*" else ["*"],
+    allow_credentials=False,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
+
+
+class SecurityHeadersMiddleware(BaseHTTPMiddleware):
+    async def dispatch(self, request: Request, call_next):
+        resp = await call_next(request)
+        resp.headers["X-Content-Type-Options"] = "nosniff"
+        resp.headers["X-Frame-Options"] = "SAMEORIGIN"
+        resp.headers["Referrer-Policy"] = "same-origin"
+        return resp
+
+
+app.add_middleware(SecurityHeadersMiddleware)
+
+
+@app.exception_handler(Exception)
+async def _global_exception_handler(request: Request, exc: Exception):
+    _log.exception("Unhandled exception on %s %s", request.method, request.url.path)
+    return JSONResponse(status_code=500, content={"detail": "Internal server error"})
+
+
 app.include_router(suppliers_router)
-init_db()
+
+
+@app.on_event("startup")
+def _startup():
+    try:
+        init_db()
+    except Exception:
+        _log.exception("Database initialisation failed — check DATABASE_URL")
 
 FRONTEND = Path(__file__).parent / "frontend"
 
@@ -66,7 +109,7 @@ class AnalyzeRequest(BaseModel):
     max_results: int = Field(default=5, ge=1, le=20)
     # New chat-driven fields. When `query` is empty the endpoint falls back to
     # the legacy ACP India+China search for backward compatibility.
-    query:  str        = ""
+    query:  str        = Field(default="", max_length=2000)
     parsed: dict | None = None    # frontend may send an edited parse override
     debug:  bool       = False    # when true, response includes raw trace
 
@@ -345,7 +388,23 @@ def _build_risk_note(winner_out: SupplierOut, validation: dict) -> str:
 # Server-side cache for on-demand insight lookups
 # ---------------------------------------------------------------------------
 
-_last_ranked: dict[str, object] = {}   # name → ValuedSupplier
+_RANKED_CACHE_MAX = 200
+_last_ranked: OrderedDict[str, object] = OrderedDict()
+_ranked_lock = threading.Lock()
+
+
+def _set_ranked_cache(mapping: dict) -> None:
+    with _ranked_lock:
+        _last_ranked.clear()
+        for k, v in mapping.items():
+            _last_ranked[k] = v
+            if len(_last_ranked) > _RANKED_CACHE_MAX:
+                _last_ranked.popitem(last=False)
+
+
+def _get_ranked_cache(name: str):
+    with _ranked_lock:
+        return _last_ranked.get(name)
 
 
 # ---------------------------------------------------------------------------
@@ -355,7 +414,7 @@ _last_ranked: dict[str, object] = {}   # name → ValuedSupplier
 # ---------------------------------------------------------------------------
 
 class ParseRequest(BaseModel):
-    query: str
+    query: str = Field(max_length=2000)
 
 
 class ParseResponse(BaseModel):
@@ -427,8 +486,7 @@ def analyze(req: AnalyzeRequest):
     medians_by_bucket = dataset_medians(ranked)      # per-(category, canonical_unit) for anomaly
 
     # Cache ranked results for on-demand insight
-    global _last_ranked
-    _last_ranked = {v.scored.record.name: v for v in ranked}
+    _set_ranked_cache({v.scored.record.name: v for v in ranked})
 
     fx     = rates.get("AUD", 1.58)
     symbol = "A$"
@@ -579,7 +637,7 @@ def get_insight(req: InsightRequest):
     if not os.environ.get("GEMMA_API_KEY"):
         raise HTTPException(status_code=400, detail="GEMMA_API_KEY not configured.")
 
-    v = _last_ranked.get(req.name)
+    v = _get_ranked_cache(req.name)
     if v is not None:
         # Happy path — rich record (includes full raw_content from the scan)
         record = v.scored.record
@@ -638,7 +696,8 @@ def health(check_serper: bool = False, check_tavily: bool = False, check_gemma: 
                 hits = serper_search_fn("ACP aluminium composite panel", max_results=1)
                 result["serper"] = {"ok": True, "results": len(hits)}
             except Exception as e:
-                result["serper"] = {"ok": False, "error": str(e)[:300]}
+                _log.warning("Health serper check failed: %s", e)
+                result["serper"] = {"ok": False, "error": type(e).__name__}
 
     if check_tavily:
         from services.tavily_client import is_available, search_fallback, TavilyError
@@ -649,7 +708,8 @@ def health(check_serper: bool = False, check_tavily: bool = False, check_gemma: 
                 hits = search_fallback("ACP aluminium composite panel", max_results=1)
                 result["tavily"] = {"ok": True, "results": len(hits)}
             except TavilyError as e:
-                result["tavily"] = {"ok": False, "error": str(e)[:300]}
+                _log.warning("Health tavily check failed: %s", e)
+                result["tavily"] = {"ok": False, "error": type(e).__name__}
 
     if check_gemma:
         gemma_key = os.environ.get("GEMMA_API_KEY", "")
@@ -658,9 +718,10 @@ def health(check_serper: bool = False, check_tavily: bool = False, check_gemma: 
         else:
             try:
                 text = call_model('Return exactly this JSON: {"ping": true}')
-                result["gemma"] = {"ok": True, "sample": text[:120]} if text else {"ok": False, "error": "Empty response"}
+                result["gemma"] = {"ok": True} if text else {"ok": False, "error": "Empty response"}
             except Exception as e:
-                result["gemma"] = {"ok": False, "error": f"{type(e).__name__}: {str(e)[:280]}"}
+                _log.warning("Health gemma check failed: %s", e)
+                result["gemma"] = {"ok": False, "error": type(e).__name__}
 
     return result
 
