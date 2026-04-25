@@ -6,3 +6,5 @@ uploads/
 .claude/
 *.db
 *.db-journal
+CLAUDE.md
+.vscode/
