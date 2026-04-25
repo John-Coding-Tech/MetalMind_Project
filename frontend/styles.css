@@ -2880,6 +2880,13 @@ body.modal-open { overflow: hidden; }
   text-transform: uppercase;
   letter-spacing: 0.06em;
 }
+.assess-subsection-title {
+  font-size: 0.95rem;
+  font-weight: 700;
+  color: var(--text);
+  margin: 1.25rem 0 0.6rem;
+  letter-spacing: 0;
+}
 
 .assess-field { margin-bottom: 1rem; }
 .assess-field:last-child { margin-bottom: 0; }
