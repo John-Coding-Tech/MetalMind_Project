@@ -6,11 +6,19 @@ Uses DATABASE_URL (Railway provides this). Falls back to SQLite for local dev.
 import os
 import logging
 from sqlalchemy import create_engine, inspect, text
+from sqlalchemy.exc import OperationalError, ProgrammingError
 from sqlalchemy.orm import sessionmaker, declarative_base
 
 _log = logging.getLogger(__name__)
 
-DATABASE_URL = os.environ.get("DATABASE_URL", "sqlite:///./metalmind.db")
+_env = os.environ.get("ENV", "development")
+DATABASE_URL = os.environ.get("DATABASE_URL", "")
+if not DATABASE_URL:
+    if _env == "production":
+        raise RuntimeError(
+            "DATABASE_URL is not set. On Railway, add the Postgres plugin or set DATABASE_URL manually."
+        )
+    DATABASE_URL = "sqlite:///./metalmind.db"
 
 if DATABASE_URL.startswith("postgres://"):
     DATABASE_URL = DATABASE_URL.replace("postgres://", "postgresql://", 1)
@@ -51,7 +59,10 @@ _SAVED_SUPPLIERS_NEW_COLUMNS = [
     ("fire_rating_confirmed", "VARCHAR(10)"),
     ("warranty_years", "INTEGER"),
     ("next_action_date", "DATE"),
-    ("is_saved", "BOOLEAN DEFAULT 1"),
+    ("is_saved", "BOOLEAN NOT NULL DEFAULT TRUE"),
+    ("reference_1", "TEXT"),
+    ("reference_2", "TEXT"),
+    ("reference_3", "TEXT"),
 ]
 
 
@@ -60,14 +71,14 @@ def _migrate_saved_suppliers():
     if not inspector.has_table("saved_suppliers"):
         return
     existing = {c["name"] for c in inspector.get_columns("saved_suppliers")}
-    with engine.begin() as conn:
-        for col_name, col_type in _SAVED_SUPPLIERS_NEW_COLUMNS:
-            if col_name not in existing:
-                try:
+    for col_name, col_type in _SAVED_SUPPLIERS_NEW_COLUMNS:
+        if col_name not in existing:
+            try:
+                with engine.begin() as conn:
                     conn.execute(text(f"ALTER TABLE saved_suppliers ADD COLUMN {col_name} {col_type}"))
-                    _log.info("Added column saved_suppliers.%s (%s)", col_name, col_type)
-                except Exception as e:
-                    _log.warning("Failed to add column saved_suppliers.%s: %s", col_name, e)
+                _log.info("Added column saved_suppliers.%s (%s)", col_name, col_type)
+            except (OperationalError, ProgrammingError) as e:
+                _log.warning("Failed to add column saved_suppliers.%s: %s", col_name, e)
 
 
 def init_db():

@@ -301,10 +301,10 @@ SQLAlchemy ORM with PostgreSQL (via `DATABASE_URL` env var) or SQLite fallback. 
 **`SavedSupplier`** — the core saved-supplier record. Includes all rule/AI scores plus user-entered procurement data:
 - Commercial terms: `quoted_price`, `MOQ`, `lead_time`, `payment_terms`, `incoterms`
 - Trust verification: `sample_status`, `sample_quality`, `factory_verified_via`, `warranty_years`
-- Material specs: `coating_confirmed`, `core_material`, `fire_rating_confirmed`
+- Free-text references: `reference_1`, `reference_2`, `reference_3` (shown as "Reference 1/2/3" in the UI)
 - Soft-delete via `is_saved=False` — unsaving a supplier preserves all notes and history
 
-**`SupplierAttachment`** — documents uploaded against a supplier (PDF, Excel, Word, images). Files are stored on the local filesystem with metadata (filename, content type, path) in the database.
+**`SupplierAttachment`** — documents uploaded against a supplier (PDF, Excel, Word, images up to 25 MB). Allowed extensions: `.pdf .doc .docx .xls .xlsx .csv .txt .png .jpg .jpeg .gif .webp`. Files are stored on the local filesystem with metadata (filename, content type, path) in the database.
 
 ---
 
@@ -313,7 +313,7 @@ SQLAlchemy ORM with PostgreSQL (via `DATABASE_URL` env var) or SQLite fallback. 
 The `Procfile` targets Railway/Heroku:
 
 ```
-web: uvicorn main:app --host 0.0.0.0 --port $PORT
+web: gunicorn main:app -w 2 -k uvicorn.workers.UvicornWorker --bind 0.0.0.0:$PORT --timeout 90 --graceful-timeout 30 --forwarded-allow-ips="*"
 ```
 
 Required environment variables in production:
@@ -321,6 +321,7 @@ Required environment variables in production:
 ```
 TAVILY_API_KEY     # web search (required)
 GEMMA_API_KEY      # AI cross-check and insights (required for AI features)
-DATABASE_URL       # PostgreSQL connection string (optional — SQLite if unset)
-SERPER_API_KEY     # primary search engine (optional — falls back to Tavily)
+SERPER_API_KEY     # primary search engine (required)
+DATABASE_URL       # PostgreSQL connection string (Railway injects this automatically)
+ENV                # set to "production" — enforces DATABASE_URL requirement (default: development)
 ```
