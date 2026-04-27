@@ -172,15 +172,15 @@
           <div class="assess-grid-3">
             <div class="assess-field">
               <label class="assess-label">Reference 1</label>
-              <input type="text" class="assess-input" id="coating_confirmed" placeholder="" />
+              <input type="text" class="assess-input" id="reference_1" placeholder="e.g. Certificate link, quote ref…" />
             </div>
             <div class="assess-field">
               <label class="assess-label">Reference 2</label>
-              <input type="text" class="assess-input" id="core_material_confirmed" placeholder="" />
+              <input type="text" class="assess-input" id="reference_2" placeholder="" />
             </div>
             <div class="assess-field">
               <label class="assess-label">Reference 3</label>
-              <input type="text" class="assess-input" id="fire_rating_confirmed" placeholder="" />
+              <input type="text" class="assess-input" id="reference_3" placeholder="" />
             </div>
           </div>
 
@@ -231,7 +231,7 @@
           <p class="assess-help-text">Upload quotes, spec sheets, photos, or any reference files for this supplier.</p>
           <div class="attachments-actions">
             <button type="button" class="btn-attachment" id="add-attachment-btn">+ Add Attachment</button>
-            <input type="file" id="attachment-file-input" multiple hidden />
+            <input type="file" id="attachment-file-input" multiple hidden accept=".pdf,.doc,.docx,.xls,.xlsx,.csv,.txt,.png,.jpg,.jpeg,.gif,.webp" />
             <span class="attachments-status" id="attachments-status"></span>
           </div>
           <ul class="attachments-list" id="attachments-list"></ul>

@@ -12,9 +12,12 @@ import uuid
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
+from typing import Literal
+from urllib.parse import quote as url_quote
+
 from fastapi import APIRouter, Depends, HTTPException, UploadFile, File
 from fastapi.responses import FileResponse
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 from sqlalchemy.orm import Session
 
 from db import get_db
@@ -22,6 +25,7 @@ from models import SavedSupplier, SupplierAttachment
 from engine.ai_engine import call_model
 from services.tavily_client import enrich_url, is_available as tavily_available
 from services.serper_client import search as serper_search, SerperError
+from config import MAX_UPLOAD_BYTES, ALLOWED_UPLOAD_EXTS
 
 
 # Filesystem location for uploaded files. Resolved relative to project root
@@ -44,63 +48,78 @@ _log = logging.getLogger(__name__)
 router = APIRouter(prefix="/api", tags=["suppliers"])
 
 
+def _get_active_supplier(db: Session, supplier_id: int) -> SavedSupplier:
+    """Return a non-deleted supplier or raise 404."""
+    supplier = (db.query(SavedSupplier)
+                  .filter(SavedSupplier.id == supplier_id, SavedSupplier.is_saved == True)  # noqa: E712
+                  .first())
+    if not supplier:
+        raise HTTPException(status_code=404, detail="Supplier not found")
+    return supplier
+
+
 class SaveSupplierRequest(BaseModel):
-    supplier_name: str
-    country: str | None = None
-    price_display: str | None = None
-    price_usd: float | None = None
-    risk_level: str | None = None
-    risk_score: float | None = None
+    supplier_name: str = Field(max_length=500)
+    country: str | None = Field(None, max_length=100)
+    price_display: str | None = Field(None, max_length=100)
+    price_usd: float | None = Field(None, ge=0)
+    risk_level: str | None = Field(None, max_length=50)
+    risk_score: float | None = Field(None, ge=0, le=1)
     risk_reasons: list[str] | None = None
-    value_score: float | None = None
-    url: str | None = None
-    description: str | None = None
-    trust: str | None = None
+    value_score: float | None = Field(None, ge=0)
+    url: str | None = Field(None, max_length=1000)
+    description: str | None = Field(None, max_length=5000)
+    trust: str | None = Field(None, max_length=50)
     anomalies: dict | None = None
     ai_adjustment: dict | None = None
 
 
 class ChatTurn(BaseModel):
-    role: str  # "user" | "assistant"
-    content: str
+    role: Literal["user", "assistant"]
+    content: str = Field(max_length=10000)
 
 
 class AiSearchRequest(BaseModel):
-    query: str
-    selected_ids: list[int] | None = None
-    history: list[ChatTurn] | None = None
+    query: str = Field(max_length=2000)
+    selected_ids: list[int] | None = Field(None, max_length=100)
+    history: list[ChatTurn] | None = Field(None, max_length=20)
 
 
 class UpdateNoteRequest(BaseModel):
-    notes: str
+    notes: str = Field(max_length=50000)
 
 
 class AssessmentUpdateRequest(BaseModel):
     # Tier 1
-    decision_stage: str | None = None
-    rating: int | None = None
+    decision_stage: str | None = Field(None, max_length=50)
+    rating: int | None = Field(None, ge=0, le=5)
     tags: list[str] | None = None
     pros: list[str] | None = None
     cons: list[str] | None = None
     # Tier 2
-    quoted_price: float | None = None
-    quoted_currency: str | None = None
-    quoted_unit: str | None = None
-    moq: int | None = None
-    lead_time_days: int | None = None
-    payment_terms: str | None = None
-    incoterms: str | None = None
+    quoted_price: float | None = Field(None, ge=0)
+    quoted_currency: str | None = Field(None, max_length=3)
+    quoted_unit: str | None = Field(None, max_length=20)
+    moq: int | None = Field(None, ge=0)
+    lead_time_days: int | None = Field(None, ge=0, le=3650)
+    payment_terms: str | None = Field(None, max_length=500)
+    incoterms: str | None = Field(None, max_length=10)
     # Tier 3
-    sample_status: str | None = None
-    sample_quality: int | None = None
+    sample_status: str | None = Field(None, max_length=30)
+    sample_quality: int | None = Field(None, ge=0, le=5)
     factory_verified_via: list[str] | None = None
-    coating_confirmed: str | None = None
-    core_material_confirmed: str | None = None
-    fire_rating_confirmed: str | None = None
-    warranty_years: int | None = None
+    # Legacy verification columns (kept for backward compat; prefer reference_1/2/3 for new data)
+    coating_confirmed: str | None = Field(None, max_length=20)
+    core_material_confirmed: str | None = Field(None, max_length=20)
+    fire_rating_confirmed: str | None = Field(None, max_length=10)
+    # Free-text reference fields (shown as Reference 1/2/3 in the UI)
+    reference_1: str | None = Field(None, max_length=2000)
+    reference_2: str | None = Field(None, max_length=2000)
+    reference_3: str | None = Field(None, max_length=2000)
+    warranty_years: int | None = Field(None, ge=0, le=100)
     next_action_date: str | None = None  # ISO "YYYY-MM-DD"
     # Free-form notes — shared with existing endpoint
-    notes: str | None = None
+    notes: str | None = Field(None, max_length=50000)
 
 
 @router.post("/save-supplier")
@@ -168,9 +187,7 @@ def list_saved(db: Session = Depends(get_db)):
 def delete_saved(supplier_id: int, db: Session = Depends(get_db)):
     """Soft-delete: flip is_saved to False. The row and its attachments
     stay on disk/DB so a subsequent re-save restores the user's Details."""
-    supplier = db.query(SavedSupplier).filter(SavedSupplier.id == supplier_id).first()
-    if not supplier:
-        raise HTTPException(status_code=404, detail="Supplier not found")
+    supplier = _get_active_supplier(db, supplier_id)
     supplier.is_saved = False
     db.commit()
     return {"ok": True}
@@ -180,9 +197,7 @@ def delete_saved(supplier_id: int, db: Session = Depends(get_db)):
 def supplier_report(supplier_id: int, refresh: bool = False, db: Session = Depends(get_db)):
     """Generate a deep-dive report for one supplier using web search + AI.
     Uses cached report unless refresh=true."""
-    s = db.query(SavedSupplier).filter(SavedSupplier.id == supplier_id).first()
-    if not s:
-        raise HTTPException(status_code=404, detail="Supplier not found")
+    s = _get_active_supplier(db, supplier_id)
 
     # Return cached report if available and not forcing refresh
     if not refresh and s.deep_report:
@@ -294,17 +309,16 @@ Rules:
         report["generated_at"] = s.report_generated_at.isoformat()
         return report
     except json.JSONDecodeError:
-        return {"supplier_name": s.supplier_name, "error": "Could not parse AI response", "raw": raw[:1000]}
-    except Exception as e:
-        _log.error("Report generation failed: %s", e)
-        return {"supplier_name": s.supplier_name, "error": f"Report failed: {e}"}
+        _log.warning("Report AI response unparseable for %s", s.supplier_name)
+        return {"supplier_name": s.supplier_name, "error": "Could not parse AI response"}
+    except Exception:
+        _log.exception("Report generation failed for %s", s.supplier_name)
+        return {"supplier_name": s.supplier_name, "error": "Report generation failed"}
 
 
 @router.patch("/saved-supplier/{supplier_id}/notes")
 def update_notes(supplier_id: int, req: UpdateNoteRequest, db: Session = Depends(get_db)):
-    supplier = db.query(SavedSupplier).filter(SavedSupplier.id == supplier_id).first()
-    if not supplier:
-        raise HTTPException(status_code=404, detail="Supplier not found")
+    supplier = _get_active_supplier(db, supplier_id)
     supplier.notes = req.notes
     db.commit()
     db.refresh(supplier)
@@ -315,9 +329,7 @@ def update_notes(supplier_id: int, req: UpdateNoteRequest, db: Session = Depends
 def update_assessment(supplier_id: int, req: AssessmentUpdateRequest, db: Session = Depends(get_db)):
     """Update any subset of the user's primary-decision-data fields.
     Auto-save friendly: only fields present in the request body are touched."""
-    supplier = db.query(SavedSupplier).filter(SavedSupplier.id == supplier_id).first()
-    if not supplier:
-        raise HTTPException(status_code=404, detail="Supplier not found")
+    supplier = _get_active_supplier(db, supplier_id)
     data = req.model_dump(exclude_unset=True)
     if "next_action_date" in data and data["next_action_date"]:
         from datetime import date as _date
@@ -491,7 +503,7 @@ def _fmt_verified(s: SavedSupplier) -> str:
     if s.warranty_years is not None: lines.append(f"  Warranty: {s.warranty_years} years")
 
     # References (three free-text fields shown as "Reference 1/2/3" in the UI)
-    refs = [r for r in (s.coating_confirmed, s.core_material_confirmed, s.fire_rating_confirmed) if r]
+    refs = [r for r in (s.reference_1, s.reference_2, s.reference_3) if r]
     if refs: lines.append(f"  References: {'; '.join(refs)}")
 
     if s.next_action_date: lines.append(f"  Next action: {s.next_action_date}")
@@ -1068,7 +1080,7 @@ def _fmt_attachments(s: SavedSupplier, atts: list[SupplierAttachment]) -> str:
 
 @router.post("/ai-search")
 def ai_search(req: AiSearchRequest, db: Session = Depends(get_db)):
-    all_suppliers = db.query(SavedSupplier).all()
+    all_suppliers = db.query(SavedSupplier).filter(SavedSupplier.is_saved == True).all()  # noqa: E712
     if not all_suppliers:
         return {"answer": "You haven't saved any suppliers yet. Run an analysis and save some suppliers first.", "results": []}
 
@@ -1360,9 +1372,12 @@ Output ONLY the JSON object. No markdown, no extra text."""
             "structured": structured,
             "results": [_to_dict(s) for s in suppliers],
         }
-    except (json.JSONDecodeError, Exception) as e:
-        _log.warning("AI search JSON parse failed, returning raw: %s", e)
-        return {"answer": raw if raw else "AI search failed.", "structured": None, "results": [_to_dict(s) for s in suppliers]}
+    except json.JSONDecodeError:
+        _log.warning("AI search JSON parse failed for query: %s", req.query[:100])
+        return {"answer": "AI search response could not be parsed. Please try again.", "structured": None, "results": [_to_dict(s) for s in suppliers]}
+    except Exception:
+        _log.exception("AI search failed")
+        return {"answer": "AI search failed. Please try again.", "structured": None, "results": [_to_dict(s) for s in suppliers]}
 
 
 def _to_dict(s: SavedSupplier) -> dict:
@@ -1402,6 +1417,9 @@ def _to_dict(s: SavedSupplier) -> dict:
         "coating_confirmed": s.coating_confirmed,
         "core_material_confirmed": s.core_material_confirmed,
         "fire_rating_confirmed": s.fire_rating_confirmed,
+        "reference_1": s.reference_1,
+        "reference_2": s.reference_2,
+        "reference_3": s.reference_3,
         "warranty_years": s.warranty_years,
         "next_action_date": s.next_action_date.isoformat() if s.next_action_date else None,
     }
@@ -1425,8 +1443,7 @@ def _attachment_to_dict(a: SupplierAttachment) -> dict:
 @router.get("/suppliers/{supplier_id}/attachments")
 def list_attachments(supplier_id: int, db: Session = Depends(get_db)):
     """Return metadata for every attachment belonging to this supplier."""
-    if not db.query(SavedSupplier).filter(SavedSupplier.id == supplier_id).first():
-        raise HTTPException(status_code=404, detail="Supplier not found")
+    _get_active_supplier(db, supplier_id)
 
     rows = (db.query(SupplierAttachment)
               .filter(SupplierAttachment.supplier_id == supplier_id)
@@ -1442,11 +1459,18 @@ async def upload_attachment(
     db: Session = Depends(get_db),
 ):
     """Accept a multipart file upload and store it under uploads/{supplier_id}/."""
-    supplier = db.query(SavedSupplier).filter(SavedSupplier.id == supplier_id).first()
-    if not supplier:
-        raise HTTPException(status_code=404, detail="Supplier not found")
+    _get_active_supplier(db, supplier_id)
 
     safe_name = _sanitize_filename(file.filename or "file")
+
+    # Extension allowlist — reject before writing any bytes to disk
+    ext = Path(safe_name).suffix.lower()
+    if ext not in ALLOWED_UPLOAD_EXTS:
+        raise HTTPException(
+            status_code=415,
+            detail=f"File type '{ext or 'none'}' is not allowed. Allowed: {', '.join(sorted(ALLOWED_UPLOAD_EXTS))}",
+        )
+
     supplier_dir = _UPLOAD_ROOT / str(supplier_id)
     supplier_dir.mkdir(parents=True, exist_ok=True)
 
@@ -1464,23 +1488,29 @@ async def upload_attachment(
                 chunk = await file.read(1024 * 1024)  # 1 MB chunks
                 if not chunk:
                     break
-                out.write(chunk)
                 size += len(chunk)
-    except Exception as e:
-        # Clean up partial file on error
-        try:
-            disk_path.unlink(missing_ok=True)
-        except Exception:
-            pass
-        raise HTTPException(status_code=500, detail=f"Upload failed: {e}")
+                if size > MAX_UPLOAD_BYTES:
+                    disk_path.unlink(missing_ok=True)
+                    raise HTTPException(
+                        status_code=413,
+                        detail=f"File too large. Maximum size is {MAX_UPLOAD_BYTES // (1024 * 1024)} MB.",
+                    )
+                out.write(chunk)
+    except HTTPException:
+        raise
+    except Exception:
+        _log.exception("Upload stream error for supplier %d", supplier_id)
+        disk_path.unlink(missing_ok=True)
+        raise HTTPException(status_code=500, detail="Upload failed")
 
-    mime, _ = mimetypes.guess_type(file.filename or safe_name)
+    # Derive MIME from our sanitized filename to avoid trusting client Content-Type
+    mime, _ = mimetypes.guess_type(safe_name)
 
     att = SupplierAttachment(
         supplier_id=supplier_id,
-        filename=file.filename or safe_name,
+        filename=safe_name,
         stored_path=str(disk_path.relative_to(_PROJECT_ROOT).as_posix()),
-        mime_type=file.content_type or mime,
+        mime_type=mime or "application/octet-stream",
         size_bytes=size,
     )
     db.add(att)
@@ -1491,7 +1521,8 @@ async def upload_attachment(
 
 @router.get("/suppliers/{supplier_id}/attachments/{att_id}")
 def download_attachment(supplier_id: int, att_id: int, db: Session = Depends(get_db)):
-    """Serve the stored file back for download (inline when browser can render)."""
+    """Serve the stored file as a forced download (Content-Disposition: attachment)."""
+    _get_active_supplier(db, supplier_id)
     att = (db.query(SupplierAttachment)
              .filter(SupplierAttachment.id == att_id,
                      SupplierAttachment.supplier_id == supplier_id)
@@ -1503,16 +1534,19 @@ def download_attachment(supplier_id: int, att_id: int, db: Session = Depends(get
     if not disk_path.exists():
         raise HTTPException(status_code=410, detail="File is missing from disk")
 
+    mime, _ = mimetypes.guess_type(att.filename)
+    safe_header_name = url_quote(att.filename)
     return FileResponse(
         disk_path,
-        filename=att.filename,
-        media_type=att.mime_type or "application/octet-stream",
+        media_type=mime or "application/octet-stream",
+        headers={"Content-Disposition": f"attachment; filename*=UTF-8''{safe_header_name}"},
     )
 
 
 @router.delete("/suppliers/{supplier_id}/attachments/{att_id}")
 def delete_attachment(supplier_id: int, att_id: int, db: Session = Depends(get_db)):
     """Remove the DB row and best-effort unlink the file on disk."""
+    _get_active_supplier(db, supplier_id)
     att = (db.query(SupplierAttachment)
              .filter(SupplierAttachment.id == att_id,
                      SupplierAttachment.supplier_id == supplier_id)

@@ -220,7 +220,7 @@ function riskClass(level) {
 // "(est.)" so users know when the unit was inferred vs scraped explicitly.
 function formatPrice(usd, symbol, fx, unit, unitSource) {
   if (usd == null) return "—";
-  const u = unit && unit !== "unknown" ? unit : "unit";
+  const u = escapeHtml(unit && unit !== "unknown" ? unit : "unit");
   const head = `${symbol}${(usd * fx).toFixed(2)}/${u}`;
   if (unitSource && unitSource !== "regex") {
     const tag = unitSource === "keyword" ? "est." : unitSource === "category" ? "est." : "?";
@@ -256,9 +256,9 @@ function priceEstimateLine(supplier, symbol, fx, fallbackUnit) {
   const lo = supplier.price_estimated_low_usd;
   const hi = supplier.price_estimated_high_usd;
   if (lo == null || hi == null) return "";
-  const raw = supplier.price_unit && supplier.price_unit !== "unknown"
+  const raw = escapeHtml(supplier.price_unit && supplier.price_unit !== "unknown"
     ? supplier.price_unit
-    : (fallbackUnit || "unit");
+    : (fallbackUnit || "unit"));
   return `<div class="price-estimate">
     <span class="price-estimate-label">Estimated: ${symbol}${(lo * fx).toFixed(2)}–${symbol}${(hi * fx).toFixed(2)}/${raw}</span>
     <span class="price-estimate-warn" title="Estimated from country, supplier type, finish and scale signals — not a quoted price.">⚠ model</span>
@@ -294,7 +294,7 @@ function renderMarketReferenceBanner(ref, symbol) {
   const rangeEl = document.getElementById("market-reference-range");
   if (labelEl) labelEl.textContent = `${catLabel} market reference (${scope})`;
   if (rangeEl) {
-    rangeEl.innerHTML = `<strong>${symbol}${ref.low_aud.toFixed(2)} – ${symbol}${ref.high_aud.toFixed(2)}</strong> / ${ref.unit}`;
+    rangeEl.innerHTML = `<strong>${symbol}${ref.low_aud.toFixed(2)} – ${symbol}${ref.high_aud.toFixed(2)}</strong> / ${escapeHtml(ref.unit)}`;
   }
 
   if (samplesEl) {
@@ -437,12 +437,29 @@ function _insightCacheGet(supplier) {
   } catch (_) { return null; }
 }
 
+const _INSIGHT_CACHE_MAX = 50;
+const _INSIGHT_CACHE_TRACKING_KEY = "metalmind_insight_keys";
+
 function _insightCacheSet(supplier, data) {
+  const key = _insightCacheKey(supplier);
   try {
-    localStorage.setItem(_insightCacheKey(supplier), JSON.stringify({
-      data,
-      generatedAt: new Date().toISOString(),
-    }));
+    localStorage.setItem(key, JSON.stringify({ data, generatedAt: new Date().toISOString() }));
+  } catch (e) {
+    if (e instanceof DOMException && e.name === "QuotaExceededError") {
+      // Evict oldest entry and retry once
+      try {
+        const tracked = JSON.parse(localStorage.getItem(_INSIGHT_CACHE_TRACKING_KEY) || "[]");
+        if (tracked.length) { localStorage.removeItem(tracked.shift()); localStorage.setItem(_INSIGHT_CACHE_TRACKING_KEY, JSON.stringify(tracked)); }
+        localStorage.setItem(key, JSON.stringify({ data, generatedAt: new Date().toISOString() }));
+      } catch (_) {}
+      return;
+    }
+  }
+  try {
+    const tracked = JSON.parse(localStorage.getItem(_INSIGHT_CACHE_TRACKING_KEY) || "[]");
+    const updated = [...tracked.filter(k => k !== key), key];
+    if (updated.length > _INSIGHT_CACHE_MAX) { localStorage.removeItem(updated.shift()); }
+    localStorage.setItem(_INSIGHT_CACHE_TRACKING_KEY, JSON.stringify(updated));
   } catch (_) {}
 }
 
@@ -734,7 +751,7 @@ function renderResults(data) {
     card.className = `supplier-card ${rankClass}`;
     card.innerHTML = `
       ${rankBadge}
-      <div class="card-name">${s.name}</div>
+      <div class="card-name">${escapeHtml(s.name)}</div>
       <div class="card-meta">
         ${countryTag(s.country)}
         ${trustBadgeHTML(s.trust)}
@@ -746,7 +763,7 @@ function renderResults(data) {
         <div><div class="card-stat-label">Risk</div><div class="card-stat-value ${riskClass(s.risk_level)}">${s.risk_level}</div></div>
         <div><div class="card-stat-label">Value Score</div><div class="card-stat-value">${valueScoreHTML(s)}</div></div>
       </div>
-      <div class="card-url"><a href="${s.url}" target="_blank" rel="noopener">${s.url}</a></div>
+      <div class="card-url"><a href="${/^https?:/i.test(s.url) ? escapeHtml(s.url) : '#'}" target="_blank" rel="noopener">${escapeHtml(s.url || '')}</a></div>
       ${anomaliesHTML(s.anomalies)}
       ${whyThisPick}
       <details class="card-risk-details"><summary>Risk Details</summary><ul class="risk-reasons">${riskReasonsList(s.risk_reasons)}</ul></details>
@@ -778,12 +795,12 @@ function renderResults(data) {
     tr.className = `supplier-row ${idx === 0 ? "winner-row" : ""}`;
     tr.innerHTML = `
       <td><span class="rank-badge ${idx === 0 ? "r1" : idx === 1 ? "r2" : ""}">${s.rank}</span></td>
-      <td>${s.name} ${trustBadgeHTML(s.trust)} ${angleChipHTML(s)}</td>
+      <td>${escapeHtml(s.name)} ${trustBadgeHTML(s.trust)} ${angleChipHTML(s)}</td>
       <td>${countryTag(s.country)}</td>
       <td>${renderPriceCell(s, symbol, fx, fallbackUnit)}</td>
       <td class="${riskClass(s.risk_level)}">${s.risk_level}</td>
       <td>${valueScoreHTML(s)}</td>
-      <td><a href="${s.url}" target="_blank" rel="noopener" style="font-size:12px" onclick="event.stopPropagation()">${new URL(s.url).hostname}</a></td>
+      <td><a href="${/^https?:/i.test(s.url) ? escapeHtml(s.url) : '#'}" target="_blank" rel="noopener" style="font-size:12px" onclick="event.stopPropagation()">${escapeHtml((() => { try { return new URL(s.url).hostname; } catch(_) { return s.url || ''; } })())}</a></td>
       <td class="row-actions-cell"><div class="row-actions-inner">
         <span class="row-details-btn" data-action="details"><span class="row-details-btn-text">View</span><span class="row-details-btn-chevron">▸</span></span>
         <button class="row-insight-btn" data-action="insight" onclick="event.stopPropagation()">AI Insight</button>
@@ -906,7 +923,7 @@ async function runChatSearch(ev) {
     hide("chat-form");
     show("parse-preview");
   } catch (e) {
-    showError("Could not reach the server. Make sure the backend is running.");
+    showError("Service temporarily unavailable. Please try again.");
   } finally {
     if (sendBtn) sendBtn.disabled = false;
   }
@@ -967,8 +984,15 @@ function updateParseField(key, value) {
   }
 }
 
+let _confirmSearchInFlight = false;
+
 async function confirmParseAndSearch() {
-  if (!_pendingParsed) return;
+  if (!_pendingParsed || _confirmSearchInFlight) return;
+  _confirmSearchInFlight = true;
+
+  const searchBtn = document.getElementById("confirm-search-btn");
+  if (searchBtn) searchBtn.disabled = true;
+
   hide("parse-preview");
   hide("clarification");
   hide("chat-form");
@@ -997,7 +1021,10 @@ async function confirmParseAndSearch() {
       apiResult = await resp.json();
     }
   } catch (_) {
-    apiError = "Could not reach the server. Make sure the backend is running.";
+    apiError = "Service temporarily unavailable. Please try again.";
+  } finally {
+    _confirmSearchInFlight = false;
+    if (searchBtn) searchBtn.disabled = false;
   }
   apiDone = true;
   if (animDone) finalize(apiResult, apiError);
@@ -1042,7 +1069,7 @@ async function runAnalysis() {
       apiResult = await resp.json();
     }
   } catch (_) {
-    apiError = "Could not reach the server. Make sure the backend is running.";
+    apiError = "Service temporarily unavailable. Please try again.";
   }
 
   apiDone = true;
@@ -1058,9 +1085,17 @@ function finalize(data, error) {
     return;
   }
 
-  // Cache the result so Back-to-Analysis-Result restores it without re-running
-  // Use localStorage so cache survives browser close/reopen (saves API cost)
-  try { localStorage.setItem("metalmind_last_analysis", JSON.stringify({ version: 1, data: data })); } catch (_) {}
+  // Cache the result so Back-to-Analysis-Result restores it without re-running.
+  // Use localStorage so cache survives browser close/reopen (saves API cost).
+  // On QuotaExceededError, evict the stale analysis and retry once.
+  const _cachePayload = JSON.stringify({ version: 1, data: data });
+  try {
+    localStorage.setItem("metalmind_last_analysis", _cachePayload);
+  } catch (e) {
+    if (e instanceof DOMException && e.name === "QuotaExceededError") {
+      try { localStorage.removeItem("metalmind_last_analysis"); localStorage.setItem("metalmind_last_analysis", _cachePayload); } catch (_) {}
+    }
+  }
 
   renderResults(data);
   showResults();

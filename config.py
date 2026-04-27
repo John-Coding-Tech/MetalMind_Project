@@ -157,6 +157,18 @@ DISPLAY_SUPPLIER_LIMIT: int = 10
 
 
 # ---------------------------------------------------------------------------
+# File upload limits
+# ---------------------------------------------------------------------------
+
+MAX_UPLOAD_BYTES: int = 25 * 1024 * 1024   # 25 MB per file
+
+ALLOWED_UPLOAD_EXTS: frozenset[str] = frozenset({
+    ".pdf", ".doc", ".docx", ".xls", ".xlsx", ".csv", ".txt",
+    ".png", ".jpg", ".jpeg", ".gif", ".webp",
+})
+
+
+# ---------------------------------------------------------------------------
 # Missing-price handling (value_scorer)
 #
 # When a supplier has NO extracted price, value_scorer has to assign *some*
