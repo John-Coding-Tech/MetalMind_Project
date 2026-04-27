@@ -1464,8 +1464,12 @@ _FOLLOWUP_SUBSTRINGS: set[str] = {
     "more details", "be more specific", "elaborate", "tell me more",
     # ask for judgment / summary on the previous turn
     "你的判断", "你的想法", "你的看法",
-    "总结一下", "概括一下",
+    "总结一下", "概括一下", "总结",
+    "字总结", "字的总结",          # "300字总结" / "100字的总结"
     "summarize", "in summary", "your verdict", "your take",
+    # length adjustment ("再短一点" / "再长一点" / "shorter" / ...)
+    "再短", "再长", "更短", "更长",
+    "shorter", "longer",
     # generic continuation
     "继续", "再说说", "go on", "continue",
 }
@@ -1911,8 +1915,17 @@ def ai_search(req: AiSearchRequest, db: Session = Depends(get_db)):
     # introduces fresh scope (new category / new supplier name / explicit
     # intent keyword) is always treated as a new question, even when it
     # contains a follow-up substring like "总结".
-    _has_sig = not compare_mode and _has_chat_signal(req.query)
-    _is_fu = (not compare_mode) and (not _has_sig) and _is_followup(req.query)
+    # NOTE: previously gated on `not compare_mode` so explicitly-selected
+    # suppliers wouldn't have their scope overridden by a previous turn.
+    # That gate is too aggressive: compare_mode locks the SUPPLIER set
+    # (via selected_ids), but the follow-up mechanism is also what lets
+    # web_mode / intent inheritance carry across turns. Allowing follow-up
+    # in compare_mode does NOT change which suppliers are in scope (the
+    # filters still skip when compare_mode is True), it only lets the
+    # downstream logic see effective_query so e.g. _user_wants_web can
+    # inherit from "根据网上的资料..." into "能继续总结的更详细一点么?".
+    _has_sig = _has_chat_signal(req.query)
+    _is_fu = (not _has_sig) and _is_followup(req.query)
     _prev_query = _last_user_query(req.history) if _is_fu else None
     followup_mode = bool(
         _is_fu
@@ -2068,7 +2081,12 @@ def ai_search(req: AiSearchRequest, db: Session = Depends(get_db)):
     # Compare-mode: search every selected supplier (user picked the scope).
     # Explore-mode: cap at top-3 by value_score, same as the dimension-driven
     # path, to control Serper costs.
-    _user_web_requested = _user_wants_web(req.query) and bool(suppliers)
+    # Use effective_query (not req.query) so a follow-up like "300字总结"
+    # or "能继续总结的更详细一点么?" inherits the web-mode flag from the
+    # previous user turn the same way intent and filters do. Without this,
+    # web_mode silently falls off across follow-up turns even though the
+    # rest of conversation state was inherited correctly.
+    _user_web_requested = _user_wants_web(effective_query) and bool(suppliers)
     if _user_web_requested:
         web_targets_for_user = (
             list(suppliers) if compare_mode else default_targets
