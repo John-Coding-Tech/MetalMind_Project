@@ -1565,6 +1565,46 @@ _FOLLOWUP_PROMPT_PREFIX_TEMPLATES: dict[str, str] = {
 }
 
 
+# ---------------------------------------------------------------------------
+# Explicit web-source request — when the user says "search online", "网上",
+# "google it", etc., they're telling us they want web data, not a recap of
+# saved fields. The existing _QUERY_DIMENSIONS layer triggers Serper based on
+# WHICH dimension is being asked (capacity / certification / news / ...);
+# this layer is orthogonal: it triggers Serper based on WHICH SOURCE the
+# user explicitly requested. Keeping them separate so the two semantics
+# don't collide as either list grows.
+#
+# Intentionally only complex multi-character phrases — single short words
+# like "网上" (2 chars) substring-match into unrelated compounds (e.g.
+# "网上海供应商" contains "网上" at position 0–1 even though the user means
+# "上海"). Using "网上信息" / "网上的" / "网上搜" avoids that whole class
+# of false positives.
+# ---------------------------------------------------------------------------
+
+_WEB_INTENT_KEYWORDS: list[str] = [
+    # Chinese — compound phrases only (no bare 2-char "网上" / "网络")
+    "网上信息", "网上的", "网上搜", "网上找", "网上有",
+    "在网上", "来自网上", "从网上",
+    "网络信息", "网络搜",
+    "搜索一下", "google一下", "查一下网",
+    # English — phrases / unambiguous tokens
+    "online", "internet", "web search", "search the web",
+    "look online", "google",
+]
+
+
+def _user_wants_web(query: str) -> bool:
+    """
+    True when the user explicitly asked for online / web information.
+    Orthogonal to _match_dimensions (which checks WHICH dimension is asked
+    about). This one checks WHICH SOURCE the user wants.
+    """
+    if not query:
+        return False
+    q = query.lower()
+    return any(k in q for k in _WEB_INTENT_KEYWORDS)
+
+
 # Conditional tail — only attached when the user's question touches data
 # we structurally don't have (price / MOQ / lead time), AND the intent is
 # LOOKUP or RANK (so we're not redirecting an OPINION or COMPARE answer).
@@ -1979,6 +2019,29 @@ def ai_search(req: AiSearchRequest, db: Session = Depends(get_db)):
             if not _primary_is_reliable(s, field, query_lower):
                 search_targets[s.id] = s
 
+    # --- Explicit web-source request override ---
+    # When the user says "网上信息" / "search online" / "google it", force a
+    # Serper search regardless of whether _QUERY_DIMENSIONS matched any
+    # specific dimension keyword. This is the routing fix for queries like
+    # "这些公司的网上信息" where the user explicitly wants web data but no
+    # specific dimension keyword (capacity / certification / news / ...) is
+    # present in the query.
+    #
+    # Compare-mode: search every selected supplier (user picked the scope).
+    # Explore-mode: cap at top-3 by value_score, same as the dimension-driven
+    # path, to control Serper costs.
+    _user_web_requested = _user_wants_web(req.query) and bool(suppliers)
+    if _user_web_requested:
+        web_targets_for_user = (
+            list(suppliers) if compare_mode else default_targets
+        )
+        for s in web_targets_for_user:
+            search_targets[s.id] = s
+        _log.info(
+            "[ai-search] user explicitly requested web — adding %d supplier(s) to Serper queue",
+            len(web_targets_for_user),
+        )
+
     # --- Layer-C fetches (parallel, TTL-cached) ---
     # Runs all Tavily + Serper calls concurrently. Each call goes through
     # a 5-minute TTL cache keyed on url / (supplier_name + normalized query),
@@ -2307,6 +2370,13 @@ Output ONLY the JSON object. No markdown, no extra text."""
                 "matched_followup": _is_fu,
                 "prev_query":      _prev_query[:120] if _prev_query else None,
                 "effective_query": effective_query[:120],
+            },
+            "_debug_web": {
+                "user_requested":  _user_web_requested,
+                "enrich_count":    len(enrich_targets),
+                "search_count":    len(search_targets),
+                "enrich_returned": len(enriched_data),
+                "search_returned": len(web_results),
             },
             "results":     [_to_dict(s) for s in suppliers],
         }
