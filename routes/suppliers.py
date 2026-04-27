@@ -1444,6 +1444,106 @@ _VERDICT_BLOCKS: dict[str, str] = {
 }
 
 
+# ---------------------------------------------------------------------------
+# Follow-up handling — when the current query is a context-dependent
+# follow-up like "更具体一点" with no scope signal of its own, re-run the
+# classifier and filters against the PREVIOUS user query so the inherited
+# scope (intent + suppliers + category) carries forward. This avoids
+# concatenating user strings (which would pollute classification) and
+# avoids needing any session storage / frontend round-trip.
+# ---------------------------------------------------------------------------
+
+# Strong follow-ups always trigger inheritance (no signal check needed).
+_STRONG_FOLLOWUP_PHRASES: set[str] = {
+    "更具体一点", "再具体一点", "再详细一点", "详细一点",
+    "再说详细一点", "说详细点", "多说一点",
+    "more details", "be more specific", "elaborate", "tell me more",
+}
+
+# Weak follow-ups only trigger inheritance when the query has NO scope
+# signal of its own. Otherwise "继续说一下中国的供应商" would be wrongly
+# routed back to the previous turn instead of starting a new query.
+_WEAK_FOLLOWUP_PHRASES: set[str] = {
+    "再说说", "继续", "详细点", "go on", "continue",
+}
+
+
+def _followup_kind(query: str) -> str | None:
+    """Returns 'strong' / 'weak' / None."""
+    if not query:
+        return None
+    q = query.strip().lower()
+    if q in _STRONG_FOLLOWUP_PHRASES:
+        return "strong"
+    if q in _WEAK_FOLLOWUP_PHRASES:
+        return "weak"
+    return None
+
+
+def _has_chat_signal(query: str) -> bool:
+    """
+    True if `query` carries any scope signal of its own — used as the
+    "no signal" gate before deciding to inherit from the previous turn.
+
+    Signals checked:
+      - Non-default intent keyword (anything other than the FIND fallback)
+      - Category keyword from _CHAT_CATEGORY_KEYWORDS
+      - A name token >=4 chars not in _NAME_FILTER_GENERIC_TOKENS
+        (cheap proxy for "the query names a specific supplier")
+    """
+    if not query:
+        return False
+    if _classify_chat_intent(query) != "FIND":
+        return True
+    q_lower = query.lower()
+    for kws in _CHAT_CATEGORY_KEYWORDS.values():
+        if any(k in q_lower for k in kws):
+            return True
+    q_norm = _normalize_name(query)
+    distinctive = {
+        t for t in re.findall(r"\w+", q_norm)
+        if len(t) >= 4 and t not in _NAME_FILTER_GENERIC_TOKENS
+    }
+    return bool(distinctive)
+
+
+def _last_user_query(history) -> str | None:
+    """
+    Return the most recent USER message content from chat history.
+    Robust to ordering and to any trailing assistant turns. Tolerant of
+    both Pydantic ChatTurn objects (attr access) and plain dicts.
+    """
+    if not history:
+        return None
+    for msg in reversed(history):
+        role = getattr(msg, "role", None)
+        if role is None and isinstance(msg, dict):
+            role = msg.get("role")
+        if role != "user":
+            continue
+        content = getattr(msg, "content", None)
+        if content is None and isinstance(msg, dict):
+            content = msg.get("content")
+        if content:
+            return content
+    return None
+
+
+_FOLLOWUP_PROMPT_PREFIX_TEMPLATES: dict[str, str] = {
+    "Chinese": (
+        "FOLLOW-UP CONTEXT:\n"
+        "用户在追问，希望对上一轮答案给出更详细的版本。不要重复同样的总结；"
+        "请提供更具体的细节、解释或支持论据。\n\n"
+    ),
+    "English": (
+        "FOLLOW-UP CONTEXT:\n"
+        "The user is asking for a more detailed version of the previous "
+        "answer. Do NOT repeat the same summary. Provide more specific "
+        "details, explanations, or supporting points.\n\n"
+    ),
+}
+
+
 # Conditional tail — only attached when the user's question touches data
 # we structurally don't have (price / MOQ / lead time), AND the intent is
 # LOOKUP or RANK (so we're not redirecting an OPINION or COMPARE answer).
@@ -1701,12 +1801,35 @@ def ai_search(req: AiSearchRequest, db: Session = Depends(get_db)):
 
     query_lower = req.query.lower()
 
+    # --- Follow-up inheritance ------------------------------------------
+    # When the user says "更具体一点" (or similar) right after an answer,
+    # the current query carries no scope signal of its own. Re-run the
+    # classifier and filters against the PREVIOUS user query so the
+    # inherited intent + filters carry forward, instead of silently
+    # broadening back to "all saved suppliers" and intent=FIND.
+    _followup = _followup_kind(req.query)
+    _has_sig = _has_chat_signal(req.query) if _followup else True
+    _inherit = (
+        not compare_mode
+        and (_followup == "strong" or (_followup == "weak" and not _has_sig))
+    )
+    _prev_query = _last_user_query(req.history) if _inherit else None
+    followup_mode = bool(
+        _inherit
+        and _prev_query
+        and _prev_query.strip() != req.query.strip()
+    )
+    effective_query = _prev_query if followup_mode else req.query
+
     # --- Intent classifier (#1) — drives the per-intent output prompt ---
     # Order: COMPARE > OPINION > RANK > LOOKUP > FIND. Compare-mode (user
     # ticked specific suppliers) hard-overrides to COMPARE because that's
     # the explicit user signal.
-    chat_intent = "COMPARE" if compare_mode else _classify_chat_intent(req.query)
-    _log.info("[ai-search] intent=%s  query=%r", chat_intent, req.query[:80])
+    chat_intent = "COMPARE" if compare_mode else _classify_chat_intent(effective_query)
+    _log.info(
+        "[ai-search] intent=%s followup=%s query=%r effective=%r",
+        chat_intent, followup_mode, req.query[:80], effective_query[:80],
+    )
 
     # --- Language lock (Step 1: language detection) ----------------------
     # Detect language from the user's query and inject a HARD directive at
@@ -1721,6 +1844,13 @@ def ai_search(req: AiSearchRequest, db: Session = Depends(get_db)):
         f"Every free-form string in your JSON response MUST be in {detected_lang}.\n\n"
         + scope_note
     )
+    if followup_mode:
+        scope_note = (
+            _FOLLOWUP_PROMPT_PREFIX_TEMPLATES.get(
+                detected_lang, _FOLLOWUP_PROMPT_PREFIX_TEMPLATES["English"]
+            )
+            + scope_note
+        )
     _log.info("[ai-search] language=%s", detected_lang)
 
     # Debug counter exposed in response — temporary, helps verify filter wiring
@@ -1747,7 +1877,7 @@ def ai_search(req: AiSearchRequest, db: Session = Depends(get_db)):
     # so narrowing to a single named one would be wrong. Same for the
     # explicit selected_ids (compare_mode flag).
     if not compare_mode and chat_intent != "COMPARE":
-        _name_match = _filter_by_supplier_name(req.query, suppliers)
+        _name_match = _filter_by_supplier_name(effective_query, suppliers)
         _debug_filter_trace["name_filter"] = (
             None if _name_match is None
             else f"{len(_name_match)} items: {[s.supplier_name for s in _name_match]}"
@@ -1767,7 +1897,7 @@ def ai_search(req: AiSearchRequest, db: Session = Depends(get_db)):
 
     # ---- 中修: category filter (only if name filter didn't already narrow) ---
     if not compare_mode and not skip_category_filter:
-        _filtered = _filter_by_category_intent(req.query, suppliers)
+        _filtered = _filter_by_category_intent(effective_query, suppliers)
         _debug_filter_trace["category_filter"] = (
             None if _filtered is None
             else f"{len(_filtered)} items: {[s.supplier_name for s in _filtered]}"
@@ -1893,7 +2023,7 @@ def ai_search(req: AiSearchRequest, db: Session = Depends(get_db)):
     # only writes prose; the verdict shape is system-determined.
     verdict_decision: dict = {"mode": "SINGLE"}
     if chat_intent == "OPINION":
-        verdict_decision = _decide_verdict_mode(suppliers, req.query)
+        verdict_decision = _decide_verdict_mode(suppliers, effective_query)
         verdict_block = _VERDICT_BLOCKS.get(
             verdict_decision["mode"], _VERDICT_BLOCKS["SINGLE"]
         )
@@ -2148,6 +2278,12 @@ Output ONLY the JSON object. No markdown, no extra text."""
                 "winner":  (verdict_decision["winner"].supplier_name
                             if verdict_decision.get("winner") is not None else None),
                 "reasons": verdict_decision.get("reasons"),
+            },
+            "_debug_followup": {
+                "active":          followup_mode,
+                "kind":            _followup,
+                "prev_query":      _prev_query[:120] if _prev_query else None,
+                "effective_query": effective_query[:120],
             },
             "results":     [_to_dict(s) for s in suppliers],
         }
