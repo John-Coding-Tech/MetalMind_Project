@@ -1453,31 +1453,45 @@ _VERDICT_BLOCKS: dict[str, str] = {
 # avoids needing any session storage / frontend round-trip.
 # ---------------------------------------------------------------------------
 
-# Strong follow-ups always trigger inheritance (no signal check needed).
-_STRONG_FOLLOWUP_PHRASES: set[str] = {
-    "更具体一点", "再具体一点", "再详细一点", "详细一点",
-    "再说详细一点", "说详细点", "多说一点",
+# Substrings whose presence in a SHORT query (<= _FOLLOWUP_MAX_LEN chars)
+# indicates a follow-up to the previous turn. Substring (not exact match)
+# so natural phrasings like "能给出我更多的细节么" / "你的判断是什么"
+# are caught, not just the canonical "更具体一点" / "elaborate" forms.
+_FOLLOWUP_SUBSTRINGS: set[str] = {
+    # ask for more detail / specificity
+    "更具体", "更详细", "更多细节", "更多的细节",
+    "再具体", "再详细", "详细一点", "详细点",
     "more details", "be more specific", "elaborate", "tell me more",
+    # ask for judgment / summary on the previous turn
+    "你的判断", "你的想法", "你的看法",
+    "总结一下", "概括一下",
+    "summarize", "in summary", "your verdict", "your take",
+    # generic continuation
+    "继续", "再说说", "go on", "continue",
 }
 
-# Weak follow-ups only trigger inheritance when the query has NO scope
-# signal of its own. Otherwise "继续说一下中国的供应商" would be wrongly
-# routed back to the previous turn instead of starting a new query.
-_WEAK_FOLLOWUP_PHRASES: set[str] = {
-    "再说说", "继续", "详细点", "go on", "continue",
-}
+# Length cap: long queries usually carry their own scope (a new question)
+# even when they happen to contain a follow-up substring like "你觉得".
+# 20 chars cleanly covers "你的判断是什么" / "更多的细节么" / "总结一下"
+# while excluding "你觉得中国供应商的价格怎么样" (which is a real new
+# question that just contains a follow-up-shaped phrase).
+_FOLLOWUP_MAX_LEN = 20
 
 
-def _followup_kind(query: str) -> str | None:
-    """Returns 'strong' / 'weak' / None."""
+def _is_followup(query: str) -> bool:
+    """
+    True when the (short) query is a context-dependent follow-up like
+    '能给出我更多的细节么' / 'your verdict?'. The caller still gates this
+    behind a signal check (護栏 2: signal-first) so a query that
+    introduces fresh scope is treated as a new question even if it
+    contains a follow-up substring.
+    """
     if not query:
-        return None
+        return False
     q = query.strip().lower()
-    if q in _STRONG_FOLLOWUP_PHRASES:
-        return "strong"
-    if q in _WEAK_FOLLOWUP_PHRASES:
-        return "weak"
-    return None
+    if len(q) > _FOLLOWUP_MAX_LEN:
+        return False
+    return any(s in q for s in _FOLLOWUP_SUBSTRINGS)
 
 
 def _has_chat_signal(query: str) -> bool:
@@ -1499,10 +1513,17 @@ def _has_chat_signal(query: str) -> bool:
     for kws in _CHAT_CATEGORY_KEYWORDS.values():
         if any(k in q_lower for k in kws):
             return True
+    # Distinctive name-shaped tokens. Restrict to tokens with at least one
+    # ASCII letter — _NAME_FILTER_GENERIC_TOKENS is ASCII-only, and saved
+    # supplier names today are ASCII. A pure-CJK token like "更多的细节"
+    # would otherwise be mis-detected as "this query mentions a supplier
+    # name", silently disabling follow-up inheritance for Chinese users.
     q_norm = _normalize_name(query)
     distinctive = {
         t for t in re.findall(r"\w+", q_norm)
-        if len(t) >= 4 and t not in _NAME_FILTER_GENERIC_TOKENS
+        if len(t) >= 4
+        and t not in _NAME_FILTER_GENERIC_TOKENS
+        and re.search(r"[a-z]", t)
     }
     return bool(distinctive)
 
@@ -1802,20 +1823,21 @@ def ai_search(req: AiSearchRequest, db: Session = Depends(get_db)):
     query_lower = req.query.lower()
 
     # --- Follow-up inheritance ------------------------------------------
-    # When the user says "更具体一点" (or similar) right after an answer,
-    # the current query carries no scope signal of its own. Re-run the
-    # classifier and filters against the PREVIOUS user query so the
-    # inherited intent + filters carry forward, instead of silently
+    # When the user says "能给出更多细节么" / "你的判断是什么" right after
+    # an answer, the current query carries no scope signal of its own.
+    # Re-run the classifier and filters against the PREVIOUS user query so
+    # the inherited intent + filters carry forward, instead of silently
     # broadening back to "all saved suppliers" and intent=FIND.
-    _followup = _followup_kind(req.query)
-    _has_sig = _has_chat_signal(req.query) if _followup else True
-    _inherit = (
-        not compare_mode
-        and (_followup == "strong" or (_followup == "weak" and not _has_sig))
-    )
-    _prev_query = _last_user_query(req.history) if _inherit else None
+    #
+    # Order matters (護栏 2): signal check runs FIRST. A query that
+    # introduces fresh scope (new category / new supplier name / explicit
+    # intent keyword) is always treated as a new question, even when it
+    # contains a follow-up substring like "总结".
+    _has_sig = not compare_mode and _has_chat_signal(req.query)
+    _is_fu = (not compare_mode) and (not _has_sig) and _is_followup(req.query)
+    _prev_query = _last_user_query(req.history) if _is_fu else None
     followup_mode = bool(
-        _inherit
+        _is_fu
         and _prev_query
         and _prev_query.strip() != req.query.strip()
     )
@@ -2281,7 +2303,8 @@ Output ONLY the JSON object. No markdown, no extra text."""
             },
             "_debug_followup": {
                 "active":          followup_mode,
-                "kind":            _followup,
+                "has_signal":      _has_sig,
+                "matched_followup": _is_fu,
                 "prev_query":      _prev_query[:120] if _prev_query else None,
                 "effective_query": effective_query[:120],
             },
