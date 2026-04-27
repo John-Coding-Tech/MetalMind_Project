@@ -32,8 +32,11 @@ RISK_WEIGHT: float = 0.6
 
 # Soft-cap zone for high-risk suppliers — value smoothly decays toward
 # HIGH_RISK_VALUE_CAP as risk_score moves from DECAY_START to DECAY_END.
-# Previously this was a hard step at 0.7 causing discontinuous ranks.
-HIGH_RISK_DECAY_START: float = 0.60
+# DECAY_START is aligned to RISK_LEVEL_MEDIUM_MAX so any supplier shown
+# as "High" risk in the UI starts decaying immediately (otherwise there's
+# a 0.55-0.60 dead-zone where a supplier looks High but pays no penalty —
+# Bug C).
+HIGH_RISK_DECAY_START: float = 0.55
 HIGH_RISK_DECAY_END:   float = 0.80
 HIGH_RISK_VALUE_CAP:   float = 0.30
 
@@ -216,6 +219,19 @@ COUNTRY_PRICE_MULTIPLIER: dict[str, float] = {
     "United Arab Emirates": 1.10,
     "Saudi Arabia":         1.10,
     "Australia":            1.15,
+    # +12 metals-relevant additions (relative to global midpoint)
+    "Brazil":               0.75,   # iron ore + copper, low cost
+    "Chile":                1.00,   # #1 copper producer; LME-pegged
+    "Peru":                 0.90,   # #2 copper, slightly cheaper
+    "Mexico":               0.85,   # NAFTA labor cost tier
+    "Canada":               1.20,   # high labor + regulatory
+    "Russia":               0.80,   # low cost (sanctions complicate access)
+    "South Africa":         0.85,   # mining-heavy, cheap labor
+    "Egypt":                0.85,   # MENA hub for steel
+    "Spain":                1.20,   # EU
+    "Poland":               1.00,   # cheaper EU
+    "France":               1.30,   # high-cost EU
+    "United Kingdom":       1.25,
     # "Unknown" falls through to 1.0 (caller uses .get(country, 1.0))
 }
 
@@ -263,3 +279,16 @@ MARKET_RANGE_THRESHOLDS: dict[str, float] = {
 # upside for high-spec variants).
 ESTIMATE_RANGE_LOW_MULT:  float = 0.80
 ESTIMATE_RANGE_HIGH_MULT: float = 1.30
+
+# --- Extracted-price sanity bounds (Bug A) ---
+# Anything outside [low_mult × midpoint, high_mult × midpoint] is treated as
+# garbage from the page (regex false positives like "$0.01/ton" picked up
+# from a product code or a sort key). Such prices are dropped — the supplier
+# gets the model estimate path instead.
+#
+# Bounds are intentionally wide. Real ACP can vary 10x (PE vs PVDF FR), and
+# bulk vs sample pricing can swing 5x — so anything within [5%, 2000%] of
+# midpoint is plausible. Numbers tighter than this start rejecting real
+# discounts; wider than this lets through obvious garbage.
+PRICE_SANITY_LOW_MULT:  float = 0.05
+PRICE_SANITY_HIGH_MULT: float = 20.0

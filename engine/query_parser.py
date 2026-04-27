@@ -97,6 +97,49 @@ _COUNTRY_KW: dict[str, str] = {
     # Australia
     "australia": "Australia", "australian": "Australia", "澳大利亚": "Australia",
     "sydney": "Australia", "melbourne": "Australia",
+    # --- +12 metals-relevant additions ---
+    # Brazil — iron ore #2 globally, big in copper / steel
+    "brazil": "Brazil", "brazilian": "Brazil", "巴西": "Brazil",
+    "sao paulo": "Brazil", "são paulo": "Brazil", "rio de janeiro": "Brazil",
+    # Chile — #1 copper producer in the world
+    # ("chile" alone is too generic — chili pepper, etc. — so we rely on
+    #  city names + "chilean")
+    "chilean": "Chile", "智利": "Chile",
+    "santiago": "Chile", "antofagasta": "Chile",
+    # Peru — #2 copper producer
+    # ("peru" alone is too short for safe substring match)
+    "peruvian": "Peru", "秘鲁": "Peru", "lima": "Peru",
+    # Mexico
+    "mexico": "Mexico", "mexican": "Mexico", "墨西哥": "Mexico",
+    "monterrey": "Mexico", "guadalajara": "Mexico",
+    # Canada
+    "canada": "Canada", "canadian": "Canada", "加拿大": "Canada",
+    "toronto": "Canada", "montreal": "Canada", "vancouver": "Canada",
+    # Russia
+    "russia": "Russia", "russian": "Russia", "俄罗斯": "Russia",
+    "moscow": "Russia", "st petersburg": "Russia",
+    # South Africa
+    "south africa": "South Africa", "south african": "South Africa",
+    "南非": "South Africa", "johannesburg": "South Africa",
+    "cape town": "South Africa", "durban": "South Africa",
+    # Egypt
+    "egypt": "Egypt", "egyptian": "Egypt", "埃及": "Egypt",
+    "cairo": "Egypt", "alexandria": "Egypt",
+    # Spain
+    "spain": "Spain", "spanish": "Spain", "西班牙": "Spain",
+    "madrid": "Spain", "barcelona": "Spain",
+    # Poland — NOT "polish" (collides with the "polished" finish keyword)
+    "poland": "Poland", "波兰": "Poland",
+    "warsaw": "Poland", "krakow": "Poland",
+    # France
+    "france": "France", "french": "France", "法国": "France",
+    "paris": "France", "lyon": "France", "marseille": "France",
+    # United Kingdom — NOT bare "uk" (matches "duke", "huk", etc.)
+    # NOT bare "british" (collides with "British Columbia" → Canada)
+    "united kingdom": "United Kingdom", "great britain": "United Kingdom",
+    "u.k.": "United Kingdom", "england": "United Kingdom",
+    "london": "United Kingdom", "manchester": "United Kingdom",
+    "sheffield": "United Kingdom", "英国": "United Kingdom",
 }
 
 # Category keyword → canonical category. A category is the broad product family

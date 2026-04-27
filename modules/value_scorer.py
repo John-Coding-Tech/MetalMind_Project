@@ -211,17 +211,31 @@ def _apply_high_risk_decay(value: float, risk_score: float) -> float:
 # Public API
 # ---------------------------------------------------------------------------
 
-def compute_value_scores(scored_suppliers: list[ScoredSupplier]) -> list[ValuedSupplier]:
+def compute_value_scores(
+    scored_suppliers: list[ScoredSupplier],
+    query_variant: str = "",
+) -> list[ValuedSupplier]:
     """
     Compute value scores for all suppliers, bucketed by (category, canonical_unit).
 
     Args:
         scored_suppliers: Output of risk_scorer.score_all()
+        query_variant:    Optional variant from the parsed query (e.g.
+                          "marble", "pvdf_coated"). Used to classify each
+                          extracted price against the per-country market
+                          midpoint — prices that classify as
+                          "suspicious_low" are demoted to MISSING_PRICE_SCORE
+                          so a regex-extracted-but-implausibly-cheap number
+                          can't outrank a real Low-risk no-price supplier
+                          (Bug B fix).
 
     Returns:
         List of ValuedSupplier in the same order as the input, each annotated
         with bucket_key + bucket_size for downstream debug/UI.
     """
+    # Local import to avoid a circular dep (price_estimator imports nothing
+    # from this module, but the engine ↔ modules boundary stays one-way).
+    from engine.price_estimator import classify_price_vs_market
     n = len(scored_suppliers)
     if n == 0:
         return []
@@ -274,11 +288,40 @@ def compute_value_scores(scored_suppliers: list[ScoredSupplier]) -> list[ValuedS
     bucket_size: list[int]   = [0]   * n
 
     for key, idxs in buckets.items():
-        priced_idxs   = [i for i in idxs if canon_price[i] is not None]
+        # Bug B fix: filter out prices classified as "suspicious_low"
+        # against the per-country market midpoint. They get the missing-
+        # price treatment so a $4500/ton (50% of $9000 copper market)
+        # doesn't outrank a real Low-risk no-price supplier just by
+        # virtue of being cheapest in the dataset.
+        priced_idxs = []
+        suspicious_idxs = []
+        for i in idxs:
+            if canon_price[i] is None:
+                continue
+            rec_i = scored_suppliers[i].record
+            cls = classify_price_vs_market(
+                rec_i.price_est,                              # original-unit price
+                getattr(rec_i, "category", "") or "unknown",
+                rec_i.country,
+                query_variant,
+            )
+            if cls == "suspicious_low":
+                suspicious_idxs.append(i)
+            else:
+                priced_idxs.append(i)
+
         priced_values = [canon_price[i] for i in priced_idxs]
         scores = _normalise_within_bucket(priced_values, key)
         for i, sc in zip(priced_idxs, scores):
             price_score[i] = sc
+            price_used[i]  = canon_price[i]
+            bucket_size[i] = len(priced_values)
+
+        # Suspicious-low priced suppliers: same treatment as no-price
+        # (MISSING_PRICE_SCORE), but we keep their numeric price_used so
+        # the UI badge ("🚨 Suspiciously low") still appears next to it.
+        for i in suspicious_idxs:
+            price_score[i] = MISSING_PRICE_SCORE
             price_used[i]  = canon_price[i]
             bucket_size[i] = len(priced_values)
 

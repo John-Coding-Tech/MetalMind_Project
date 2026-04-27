@@ -172,6 +172,19 @@ _COUNTRY_TLD: dict[str, str] = {
     ".ae": "United Arab Emirates",
     ".sa": "Saudi Arabia",
     ".au": "Australia",
+    # +12 metals-relevant additions
+    ".br": "Brazil",
+    ".cl": "Chile",
+    ".pe": "Peru",
+    ".mx": "Mexico",
+    ".ca": "Canada",
+    ".ru": "Russia",
+    ".za": "South Africa",
+    ".eg": "Egypt",
+    ".es": "Spain",
+    ".pl": "Poland",
+    ".fr": "France",
+    ".uk": "United Kingdom",
 }
 
 
@@ -219,6 +232,24 @@ _COUNTRY_KEYWORDS: list[tuple[str, list[str]]] = [
     ("United Arab Emirates", ["united arab emirates", "u.a.e", "uae", "dubai"]),
     ("Saudi Arabia",         ["saudi arabia", "saudi", "riyadh"]),
     ("Australia",            ["australia", "australian", "sydney", "melbourne"]),
+    # --- +12 metals-relevant additions ---
+    # Avoid 2-letter ambiguous keywords (e.g. "uk" matches "duke") and
+    # avoid words that collide with our domain (e.g. "polish" collides
+    # with the "polished" finish keyword in _VARIANT_KW).
+    ("Brazil",         ["brazil", "brazilian", "sao paulo", "rio de janeiro"]),
+    ("Chile",          ["chilean", "santiago", "antofagasta"]),  # "chile" alone is too generic (chili pepper)
+    ("Peru",           ["peruvian", "lima"]),                    # "peru" alone risks false positives
+    ("Mexico",         ["mexico", "mexican", "monterrey", "guadalajara"]),
+    ("Canada",         ["canada", "canadian", "toronto", "montreal", "vancouver"]),
+    ("Russia",         ["russia", "russian", "moscow", "st petersburg"]),
+    ("South Africa",   ["south africa", "south african", "johannesburg",
+                        "cape town", "durban"]),
+    ("Egypt",          ["egypt", "egyptian", "cairo", "alexandria"]),
+    ("Spain",          ["spain", "spanish", "madrid", "barcelona"]),
+    ("Poland",         ["poland", "warsaw", "krakow"]),          # NOT "polish" (variant collision)
+    ("France",         ["france", "french", "paris", "lyon", "marseille"]),
+    ("United Kingdom", ["united kingdom", "great britain", "u.k.",
+                        "england", "london", "manchester", "sheffield"]),
 ]
 
 
@@ -894,6 +925,27 @@ def clean_results(
         name          = _extract_name(title, url)
         price_raw, price_est, price_unit, price_unit_src, price_original = \
             _extract_price(combined_text, rates, category)
+
+        # --- Bug A fix: kill obviously absurd extracted prices ---------
+        # E.g. regex picks "$0.01/ton" out of a copper page from a sort
+        # key or product code. Anything outside [5%, 2000%] of the
+        # category midpoint is treated as "no price" so the supplier
+        # falls into the model-estimate path instead of dragging price
+        # rankings with a fake-cheap number.
+        from engine.price_estimator import is_extracted_price_sane
+        if price_est is not None and not is_extracted_price_sane(
+            price_est, category, price_unit
+        ):
+            _log.info(
+                "[clean] dropped insane price %s/%s for category=%s (page=%s)",
+                price_est, price_unit, category, url[:60],
+            )
+            price_raw = "Not found"
+            price_est = None
+            price_unit = "unknown"
+            price_unit_src = "unknown"
+            price_original = ""
+
         signals       = _extract_signals(combined_text, content)
         supplier_type = _guess_supplier_type(content)
 

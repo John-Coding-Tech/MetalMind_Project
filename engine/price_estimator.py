@@ -44,6 +44,8 @@ from config import (
     MARKET_RANGE_THRESHOLDS,
     ESTIMATE_RANGE_LOW_MULT,
     ESTIMATE_RANGE_HIGH_MULT,
+    PRICE_SANITY_LOW_MULT,
+    PRICE_SANITY_HIGH_MULT,
 )
 
 _log = logging.getLogger(__name__)
@@ -144,6 +146,33 @@ def estimate_supplier_price(
 # Range classification — bucket a real price against the per-country market
 # midpoint. Returns the string the frontend uses to pick a badge.
 # ---------------------------------------------------------------------------
+
+def is_extracted_price_sane(
+    price_usd: float | None,
+    category: str,
+    unit: str,
+) -> bool:
+    """
+    Return False when an extracted price is so far outside the category's
+    plausible range that it's almost certainly a regex false positive
+    (e.g. a product code, sort key, or year picked up as "$0.01/ton").
+
+    Bounds come from config.PRICE_SANITY_LOW_MULT / HIGH_MULT applied to
+    the (category, unit) midpoint. Categories without a config midpoint
+    (or unknown unit) are NOT sanity-checked — we let those through and
+    let downstream logic decide.
+    """
+    if price_usd is None or price_usd <= 0:
+        return False
+    if not category or not unit or category == "unknown" or unit == "unknown":
+        return True
+    midpoint = CATEGORY_MEDIANS_USD.get((category, unit))
+    if not midpoint:
+        return True
+    lo = midpoint * PRICE_SANITY_LOW_MULT
+    hi = midpoint * PRICE_SANITY_HIGH_MULT
+    return lo <= price_usd <= hi
+
 
 def classify_price_vs_market(
     price_usd: float | None,

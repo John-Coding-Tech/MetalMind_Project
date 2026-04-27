@@ -418,7 +418,11 @@ def analyze(req: AnalyzeRequest):
 
     # --- Layer 1: RULE ENGINE (decision maker) ---
     scored = score_all(all_records)
-    valued = compute_value_scores(scored)
+    # Pass parsed.variant so value_scorer can demote prices that classify
+    # as "suspicious_low" against the per-country market midpoint
+    # (Bug B fix). Empty string for the legacy ACP path.
+    _query_variant_for_scorer = (parsed_for_response or {}).get("variant") or ""
+    valued = compute_value_scores(scored, query_variant=_query_variant_for_scorer)
     ranked = rank_suppliers(valued)
     top3   = get_top3(ranked)
     winner = get_winner(top3)
