@@ -1078,6 +1078,369 @@ def _fmt_attachments(s: SavedSupplier, atts: list[SupplierAttachment]) -> str:
     return "\n".join(lines)
 
 
+# ---------------------------------------------------------------------------
+# Chat intent classifier (#1) — keyword-based with priority order.
+# COMPARE must check first (otherwise "A vs B 哪个更便宜" gets routed to RANK
+# because "便宜" trips the RANK keyword). Order = priority.
+# ---------------------------------------------------------------------------
+
+_INTENT_KEYWORDS: list[tuple[str, list[str]]] = [
+    ("COMPARE", ["对比", "compare", " vs ", " versus ", "和.*哪个", "head-to-head"]),
+    ("OPINION", ["为什么", "why ", "靠谱吗", "可信", "你觉得", "think", "your opinion",
+                 "好不好", "怎么样",
+                 # +Bug 1 fix: analysis / future / assessment intents
+                 "分析", "未来", "前景", "评估", "评价", "看法",
+                 "analyze", "future", "prospect", "outlook", "assessment", "review of"]),
+    ("RANK",    ["最", "lowest", "highest", "cheapest", "safest", "best", "top "]),
+    ("LOOKUP",  ["多少", "how much", "moq", "price", "lead time", "delivery",
+                 "email", "phone", "联系", "交期", "报价", "价格"]),
+    ("FIND",    ["哪家", "哪个", "which supplier", "which one", "who has", "who sells",
+                 "find", "找一家", "找一个", "哪一家"]),
+]
+
+
+def _detect_query_language(query: str) -> str:
+    """
+    Decide whether to reply in Chinese or English. Mixed-language queries
+    (a common case: "China Copper Sheet 未来前景") should be answered in
+    Chinese because the user is Chinese-speaking and just used the
+    supplier's English brand name verbatim.
+
+    Detection: ANY of (≥2 Chinese chars) OR (>20% of chars are Chinese)
+    triggers Chinese; otherwise English.
+    """
+    if not query:
+        return "English"
+    cn_chars = sum(1 for c in query if "一" <= c <= "鿿")
+    total = len(query)
+    if cn_chars >= 2:
+        return "Chinese"
+    if total > 0 and cn_chars / total > 0.20:
+        return "Chinese"
+    return "English"
+
+
+def _classify_chat_intent(query: str) -> str:
+    """
+    Return one of: COMPARE / OPINION / RANK / LOOKUP / FIND.
+
+    Falls back to FIND when no keyword hits — FIND's prompt is the safest
+    default (1-line direct answer about which supplier matches), better
+    than letting the LLM go report-mode again.
+    """
+    if not query:
+        return "FIND"
+    q = query.lower()
+    for intent, kws in _INTENT_KEYWORDS:
+        for kw in kws:
+            # Treat regex-looking patterns separately so substring "和" doesn't
+            # match every Chinese question with a comma.
+            if ".*" in kw:
+                if re.search(kw, q):
+                    return intent
+            else:
+                if kw in q:
+                    return intent
+    return "FIND"
+
+
+# Per-intent prompt overrides. We do NOT replace the existing 120-line
+# rule body — we LAYER an intent-specific instruction block on top so the
+# model has hard length / format constraints regardless of the FORMAT A/B/C
+# JSON schema below.
+
+_INTENT_PROMPT_OVERRIDE: dict[str, str] = {
+    "FIND": (
+        "INTENT: FIND — user wants to know which supplier(s) match a category "
+        "or criterion.\n"
+        "OUTPUT: maximum 3 short sentences. State the matching supplier(s) "
+        "directly. If only one matches, say so plainly. If none match, say so "
+        "and suggest expanding the search. Do NOT discuss non-matching "
+        "suppliers. Do NOT write per-supplier paragraphs."
+    ),
+    "LOOKUP": (
+        "INTENT: LOOKUP — user wants a specific fact (MOQ, lead time, email, "
+        "price, etc.).\n"
+        "OUTPUT: maximum 3 short sentences. If the fact exists in VERIFIED or "
+        "ATTACHMENTS, quote it directly. If the fact is not in any data layer, "
+        "say 'I don't have that information' — do not invent or estimate."
+    ),
+    "RANK": (
+        "INTENT: RANK — user wants the best / lowest / highest / cheapest by "
+        "some criterion.\n"
+        "OUTPUT: maximum 3 short sentences. Name the top supplier with one "
+        "short reason. If the criterion is ambiguous, default to value_score "
+        "and state that assumption in one clause."
+    ),
+    "COMPARE": (
+        "INTENT: COMPARE — user wants head-to-head comparison between "
+        "specific suppliers.\n"
+        "OUTPUT: 4-8 lines, bullet style (NOT a markdown table — those break "
+        "in the renderer). Cover Country, Risk, Price, and one distinguishing "
+        "field. End with a one-sentence verdict on which is preferable for the "
+        "user's likely goal."
+    ),
+    "OPINION": (
+        "INTENT: OPINION — user wants a judgment, assessment, or analysis.\n"
+        "OUTPUT: maximum 3 short sentences.\n"
+        "If the question requires data not available (e.g. future prospects, "
+        "market trends, financial health, recent news, industry analysis, "
+        "growth potential):\n"
+        "- First, give a brief assessment based ONLY on available supplier "
+        "data (1 sentence).\n"
+        "- Then, append the following sentence EXACTLY (verbatim, do not "
+        "translate the button name 'AI Deep Report'):\n"
+        "    {DEEP_REPORT_LINE}\n"
+        "The entire response MUST be in the required language.\n"
+        "Do NOT include placeholders, bracketed text, or curly-brace tokens "
+        "in your output. Do NOT invent industry analysis from generic "
+        "knowledge. Do NOT speculate beyond what's in the supplier data. "
+        "Avoid hedging language ('might', 'could', 'perhaps')."
+    ),
+}
+
+
+# Language-specific Deep Report redirect line. Injected into the OPINION
+# prompt at request time via {DEEP_REPORT_LINE} substitution. Button name
+# "AI Deep Report" stays untranslated so the user can find the actual button
+# in the UI (the UI label is English).
+_DEEP_REPORT_TEMPLATES: dict[str, str] = {
+    "Chinese": "如需了解市场趋势和最新动态的深入分析，请点击 AI Deep Report 按钮。",
+    "English": "For deeper analysis on market trends and recent news, click the AI Deep Report button.",
+}
+
+
+# Conditional tail — only attached when the user's question touches data
+# we structurally don't have (price / MOQ / lead time), AND the intent is
+# LOOKUP or RANK (so we're not redirecting an OPINION or COMPARE answer).
+
+_TAIL_KEYWORDS = [
+    "price", "cost", "quote", "moq",
+    "lead time", "delivery",
+    "交期", "价格", "报价", "成本",
+    "how much", "多少钱",
+    # Price-implying ranking words — "cheapest copper supplier" implies the
+    # user wants the price answer, so route them to RFQ as well.
+    "cheap", "cheaper", "cheapest", "expensive", "afford", "便宜",
+]
+
+_TAIL_TEXT = "For MOQ, lead time, and exact pricing, request a quote."
+
+
+def _should_add_tail(query: str, intent: str) -> bool:
+    if intent not in ("LOOKUP", "RANK"):
+        return False
+    q = (query or "").lower()
+    return any(k in q for k in _TAIL_KEYWORDS)
+
+
+# ---------------------------------------------------------------------------
+# Chat helpers (中修): pre-filter by category intent + strip noisy source tags.
+# ---------------------------------------------------------------------------
+# Goal: when the user asks "which one is a copper supplier", we don't want
+# the LLM to dutifully list all 4 saved suppliers and apologize for the
+# 3 ACP ones. Backend filters first → LLM only narrates the matching set.
+#
+# We don't have a `category` column on SavedSupplier, so we match against
+# supplier_name + description + url text. Order of dict matters: stainless
+# before steel (stainless contains "steel"), ACP before aluminum (ACP
+# contains "aluminum composite").
+
+_CHAT_CATEGORY_KEYWORDS: dict[str, list[str]] = {
+    "stainless": ["stainless", "不锈钢"],
+    "acp":       ["acp", "aluminum composite", "aluminium composite", "铝塑板", "铝复合板"],
+    "copper":    ["copper", "铜", "cuprum"],
+    "aluminum":  ["aluminum", "aluminium", "铝"],
+    "steel":     ["steel", "钢"],
+    "brass":     ["brass", "黄铜"],
+    "zinc":      ["zinc", "锌"],
+    "titanium":  ["titanium", "钛"],
+}
+
+
+# ---------------------------------------------------------------------------
+# Name-based filter (Bug 2 fix)
+#
+# When the user mentions a specific supplier by name in their question, we
+# narrow to that supplier BEFORE category filter (which would over-include
+# similarly-named peers). Three-tier match strategy:
+#
+#   Tier 1: normalized full name appears in normalized query
+#   Tier 2: ≥2 distinctive tokens overlap (after dropping GENERIC_TOKENS)
+#   Tier 3: exactly 1 distinctive token, but length ≥5 (e.g. "Aldura")
+#
+# Plus 3 safety nets:
+#   1. Normalize both sides (strip punctuation + corp suffixes)
+#   2. Score-based tie-break: only narrow when winner is uniquely top
+#   3. Unicode-preserving normalize so Chinese supplier names don't get
+#      stripped (most are English, but defensive).
+# ---------------------------------------------------------------------------
+
+# B2B / industry generic tokens — substrings shared by many suppliers, so
+# a query containing only these isn't enough to identify ONE supplier.
+_NAME_FILTER_GENERIC_TOKENS: set[str] = {
+    "copper", "steel", "sheet", "sheets", "panel", "panels",
+    "aluminum", "aluminium", "stainless", "metal", "metals",
+    "factory", "manufacturer", "manufacturers", "manufacturing",
+    "company", "co", "ltd", "llc", "inc", "corp", "corporation",
+    "industries", "industry", "supplier", "suppliers", "supply",
+    "china", "india", "vietnam", "korea", "japan", "german", "germany",
+    "from", "and", "the", "of", "in", "for", "real", "best", "top",
+}
+
+
+def _normalize_name(text: str) -> str:
+    """
+    Lowercase + strip punctuation (keep alphanumeric + Chinese) +
+    drop common corp suffixes + collapse whitespace.
+    Used on BOTH supplier name and user query for fair comparison.
+    """
+    if not text:
+        return ""
+    t = text.lower()
+    # Keep ASCII alphanumeric + space + CJK Unified Ideographs (Chinese chars)
+    t = re.sub(r'[^a-z0-9一-鿿\s]', ' ', t)
+    # Drop standalone corp suffixes
+    t = re.sub(r'\b(co|ltd|llc|inc|corp|corporation)\b', ' ', t)
+    t = re.sub(r'\s+', ' ', t).strip()
+    return t
+
+
+def _filter_by_supplier_name(query: str, suppliers: list) -> list | None:
+    """
+    If the query unambiguously names ONE supplier, return [that supplier].
+    Otherwise return None (caller falls through to category filter).
+
+    Returns None when 0 candidates OR multiple equally-strong candidates.
+    Caller is responsible for skipping this whole step in COMPARE intent.
+    """
+    q_norm = _normalize_name(query)
+    if not q_norm:
+        return None
+
+    q_tokens = set(re.findall(r'\w+', q_norm))
+
+    candidates: list[tuple[object, int]] = []   # (supplier, score)
+
+    for s in suppliers:
+        name = (s.supplier_name or "").lower()
+        if not name:
+            continue
+        name_norm = _normalize_name(name)
+        if not name_norm:
+            continue
+
+        # --- Tier 1: full normalized name appears in query (highest score) ---
+        if name_norm in q_norm:
+            candidates.append((s, 100))
+            continue
+
+        # --- Tier 1b: name MINUS trailing suffix tokens in query --------
+        # Handles "Acme Co, Suppliers, Ltd" matching when user types "Acme Co".
+        # Only relevant for names of 4+ tokens so we don't reduce short names
+        # to ambiguity.
+        name_words = name_norm.split()
+        matched_1b = False
+        if len(name_words) >= 4:
+            for drop in (1, 2, 3):
+                if drop >= len(name_words):
+                    break
+                partial = " ".join(name_words[:-drop])
+                if len(partial.split()) < 3:
+                    break
+                if partial in q_norm:
+                    candidates.append((s, 80 - drop * 5))
+                    matched_1b = True
+                    break
+        if matched_1b:
+            continue
+
+        # --- Tier 2 / 3: distinctive token overlap ----------------------
+        name_tokens = set(re.findall(r'\w+', name_norm))
+        overlap = (name_tokens & q_tokens) - _NAME_FILTER_GENERIC_TOKENS
+        # Filter very short tokens (≥4 chars) to avoid spurious matches
+        overlap = {t for t in overlap if len(t) >= 4}
+
+        if len(overlap) >= 2:                          # Tier 2
+            candidates.append((s, len(overlap) + 1))
+        elif len(overlap) == 1 and any(len(t) >= 5 for t in overlap):
+            # Tier 3: single distinctive token but length ≥5 — strong enough
+            # for unique brand names like "Aldura"
+            candidates.append((s, 2))
+
+    if not candidates:
+        return None
+
+    # Tie-break: only narrow when winner is UNIQUELY top (≥1 ahead of #2).
+    # If two candidates tie, return None — let category filter or LLM
+    # disambiguate via the question.
+    candidates.sort(key=lambda x: x[1], reverse=True)
+    if len(candidates) == 1 or candidates[0][1] >= candidates[1][1] + 1:
+        return [candidates[0][0]]
+    return None
+
+
+def _filter_by_category_intent(query: str, suppliers: list) -> list | None:
+    """
+    Pre-filter `suppliers` to those matching the product category implied
+    by the user's question. Returns None when no category was detected
+    (caller keeps the full list and adds no scope note).
+    """
+    q = (query or "").lower()
+    matched_keywords: list[str] | None = None
+    for _, kws in _CHAT_CATEGORY_KEYWORDS.items():
+        if any(k in q for k in kws):
+            matched_keywords = kws
+            break
+
+    if matched_keywords is None:
+        return None
+
+    def _hits(s) -> bool:
+        haystack = " ".join([
+            (s.supplier_name or "").lower(),
+            (s.description   or "").lower(),
+            (s.url           or "").lower(),
+        ])
+        return any(kw in haystack for kw in matched_keywords)
+
+    return [s for s in suppliers if _hits(s)]
+
+
+# Stripped from LLM output before showing to the user. We keep the raw
+# answer in the response so future audit / tooltip features can recover
+# the source attribution; this only cleans the visible text.
+#
+# Bug 3 fix: handles BOTH single tags `[rule-based]` AND comma/semicolon
+# separated lists `[rule-based, AI-analysis]` that the LLM sometimes emits.
+_SOURCE_TAG_NAMES = (
+    r"(?:rule-based|AI-analysis|web-fetch|web-search|attachment|"
+    r"user-verified|AI Deep Report)"
+)
+_SOURCE_TAG_RE = re.compile(
+    r"\s*\[" + _SOURCE_TAG_NAMES
+    + r"(?:\s*[,;]\s*" + _SOURCE_TAG_NAMES + r")*"
+    + r"\]"
+)
+
+
+def _strip_source_tags(text: str) -> str:
+    if not isinstance(text, str):
+        return text
+    return _SOURCE_TAG_RE.sub("", text)
+
+
+def _strip_source_tags_in_structured(obj):
+    """Walk the LLM JSON and clean every string field. Idempotent."""
+    if isinstance(obj, str):
+        return _strip_source_tags(obj)
+    if isinstance(obj, list):
+        return [_strip_source_tags_in_structured(x) for x in obj]
+    if isinstance(obj, dict):
+        return {k: _strip_source_tags_in_structured(v) for k, v in obj.items()}
+    return obj
+
+
 @router.post("/ai-search")
 def ai_search(req: AiSearchRequest, db: Session = Depends(get_db)):
     all_suppliers = db.query(SavedSupplier).filter(SavedSupplier.is_saved == True).all()  # noqa: E712
@@ -1103,6 +1466,98 @@ def ai_search(req: AiSearchRequest, db: Session = Depends(get_db)):
         return {"answer": "No suppliers match the selection.", "results": []}
 
     query_lower = req.query.lower()
+
+    # --- Intent classifier (#1) — drives the per-intent output prompt ---
+    # Order: COMPARE > OPINION > RANK > LOOKUP > FIND. Compare-mode (user
+    # ticked specific suppliers) hard-overrides to COMPARE because that's
+    # the explicit user signal.
+    chat_intent = "COMPARE" if compare_mode else _classify_chat_intent(req.query)
+    _log.info("[ai-search] intent=%s  query=%r", chat_intent, req.query[:80])
+
+    # --- Language lock (Step 1: language detection) ----------------------
+    # Detect language from the user's query and inject a HARD directive at
+    # the TOP of scope_note (highest LLM attention position). This is
+    # stronger than relying on phykawing's Rule #12 alone, which fails on
+    # mixed-language queries like "China Copper Sheet ... 未来前景".
+    detected_lang = _detect_query_language(req.query)
+    scope_note = (
+        f"REPLY STRICTLY IN {detected_lang.upper()}.\n"
+        f"Do NOT switch language under any circumstance, even if the question "
+        f"contains foreign brand names, product codes, or technical terms.\n"
+        f"Every free-form string in your JSON response MUST be in {detected_lang}.\n\n"
+        + scope_note
+    )
+    _log.info("[ai-search] language=%s", detected_lang)
+
+    # Debug counter exposed in response — temporary, helps verify filter wiring
+    _debug_pre_filter_count = len(suppliers)
+
+    # --- 中修: pre-filter by category intent (Bug fix for "list everything") ---
+    # If the user's question clearly names a product category (e.g. "copper",
+    # "ACP", "stainless"), narrow the supplier set BEFORE building the prompt.
+    # Without this, the LLM dutifully discusses every saved supplier and
+    # apologises for the non-matching ones — the "feels not smart" output.
+    # Compare-mode is excluded because the user has already explicitly chosen
+    # which suppliers to compare; respect that.
+    _debug_filter_trace = {
+        "compare_mode": compare_mode,
+        "intent": chat_intent,
+        "name_filter": "not_called",
+        "category_filter": "not_called",
+        "query_repr": repr(req.query),
+    }
+    skip_category_filter = False
+
+    # ---- Bug 2 fix: name filter (highest priority, COMPARE excluded) ----
+    # COMPARE mode means user is asking about multiple suppliers explicitly,
+    # so narrowing to a single named one would be wrong. Same for the
+    # explicit selected_ids (compare_mode flag).
+    if not compare_mode and chat_intent != "COMPARE":
+        _name_match = _filter_by_supplier_name(req.query, suppliers)
+        _debug_filter_trace["name_filter"] = (
+            None if _name_match is None
+            else f"{len(_name_match)} items: {[s.supplier_name for s in _name_match]}"
+        )
+        if _name_match:
+            _log.info(
+                "[ai-search] name filter narrowed %d -> 1 (%s)",
+                len(suppliers), _name_match[0].supplier_name,
+            )
+            suppliers = _name_match
+            scope_note += (
+                "\n\nNOTE: The user is referring to a specific supplier by "
+                "name. Focus ONLY on that supplier. Do NOT mention or "
+                "compare any other suppliers."
+            )
+            skip_category_filter = True
+
+    # ---- 中修: category filter (only if name filter didn't already narrow) ---
+    if not compare_mode and not skip_category_filter:
+        _filtered = _filter_by_category_intent(req.query, suppliers)
+        _debug_filter_trace["category_filter"] = (
+            None if _filtered is None
+            else f"{len(_filtered)} items: {[s.supplier_name for s in _filtered]}"
+        )
+        if _filtered is not None:
+            if 0 < len(_filtered) < len(suppliers):
+                _log.info(
+                    "[ai-search] category pre-filter: %d -> %d suppliers",
+                    len(suppliers), len(_filtered),
+                )
+                suppliers = _filtered
+                scope_note += (
+                    f"\n\nNOTE: Suppliers have been pre-filtered to "
+                    f"{len(suppliers)} based on the product category in the "
+                    f"user's question. ONLY discuss these suppliers — do "
+                    f"NOT mention or explain excluded ones."
+                )
+            elif len(_filtered) == 0:
+                scope_note += (
+                    "\n\nNOTE: The user's question implied a product category "
+                    "but none of the saved suppliers obviously matches it. "
+                    "Answer over the full saved set and tell the user that "
+                    "no exact match was found."
+                )
 
     # --- Smart Layer-C trigger plan ---
     # Compare mode: all selected suppliers are candidates (user asked about them).
@@ -1196,9 +1651,26 @@ def ai_search(req: AiSearchRequest, db: Session = Depends(get_db)):
             turns.append(f"{role}: {t.content}")
         history_block = "\n\nCONVERSATION HISTORY (for context — the user may refer to earlier answers):\n" + "\n".join(turns)
 
+    intent_override = _INTENT_PROMPT_OVERRIDE.get(chat_intent, _INTENT_PROMPT_OVERRIDE["FIND"])
+    # OPINION template carries a {DEEP_REPORT_LINE} token that must be
+    # replaced with the language-matched redirect sentence BEFORE the prompt
+    # reaches the model. Other intents don't use the token; .replace() is a
+    # no-op for them.
+    intent_override = intent_override.replace(
+        "{DEEP_REPORT_LINE}",
+        _DEEP_REPORT_TEMPLATES.get(detected_lang, _DEEP_REPORT_TEMPLATES["English"]),
+    )
+
     prompt = f"""You are a supplier intelligence assistant.
 
 {scope_note}
+
+================================================================
+{intent_override}
+
+This intent block OVERRIDES verbosity rules below. Stay within the
+length limit even when the FORMAT JSON has fields that could hold more.
+================================================================
 
 Each supplier below is presented in up to six data layers:
   [VERIFIED]      user-entered — GROUND TRUTH.
@@ -1367,10 +1839,41 @@ Output ONLY the JSON object. No markdown, no extra text."""
         if cleaned.startswith("```"):
             cleaned = cleaned.split("\n", 1)[-1].rsplit("```", 1)[0].strip()
         structured = json.loads(cleaned)
+
+        # 中修: strip [rule-based]/[AI-analysis]/etc. from visible text.
+        # Keep the original LLM output in `raw_answer` so auditing /
+        # tooltip / debug features can recover source attribution later.
+        raw_structured = structured
+        clean_structured = _strip_source_tags_in_structured(structured)
+        clean_summary = _strip_source_tags(clean_structured.get("summary", raw))
+
+        # Conditional tail (#4) — append only when the question touched
+        # data we structurally don't have AND the intent is LOOKUP/RANK
+        # (not OPINION/COMPARE, where redirecting to RFQ is jarring).
+        if _should_add_tail(req.query, chat_intent):
+            tail = _TAIL_TEXT
+            if clean_summary and not clean_summary.endswith(tail):
+                clean_summary = clean_summary.rstrip(".? ") + ". " + tail
+            # Also append to the structured 'answer' / 'info' / 'summary'
+            # fields the frontend may render directly.
+            for k in ("answer", "info", "summary"):
+                v = clean_structured.get(k)
+                if isinstance(v, str) and v and not v.endswith(tail):
+                    clean_structured[k] = v.rstrip(".? ") + ". " + tail
+
         return {
-            "answer": structured.get("summary", raw),
-            "structured": structured,
-            "results": [_to_dict(s) for s in suppliers],
+            "answer":      clean_summary,
+            "structured":  clean_structured,
+            "raw_answer":  raw,
+            "raw_structured": raw_structured,
+            "intent":      chat_intent,
+            "_debug_filter": {
+                "pre":  _debug_pre_filter_count,
+                "post": len(suppliers),
+                "names": [s.supplier_name for s in suppliers],
+                "trace": _debug_filter_trace,
+            },
+            "results":     [_to_dict(s) for s in suppliers],
         }
     except json.JSONDecodeError:
         _log.warning("AI search JSON parse failed for query: %s", req.query[:100])
