@@ -1605,6 +1605,44 @@ def _user_wants_web(query: str) -> bool:
     return any(k in q for k in _WEB_INTENT_KEYWORDS)
 
 
+# When _user_wants_web is True, the per-intent COMPARE / OPINION / RANK /
+# LOOKUP / FIND template is REPLACED entirely by this one. We don't try to
+# "override" with prepended warnings because empirically (see the
+# verdict-layer rollout) the LLM follows the most specific template in the
+# prompt, not the highest-priority one — so the only deterministic fix is
+# to remove the conflicting template, not annotate it.
+_WEB_SUMMARY_OVERRIDE_TEMPLATES: dict[str, str] = {
+    "Chinese": (
+        "INTENT: WEB SUMMARY — 用户明确请求基于网上信息的回答。\n"
+        "OUTPUT 要求：\n"
+        "- 用 4-8 句连续段落（不是 bullet list，不是字段表）。\n"
+        "- 主体内容来自每家 supplier 的 [LIVE-WEB] 段落（[web-search] / "
+        "[web-fetch] 数据）。\n"
+        "- 每条网上事实必须带 [web-search] 或 [web-fetch] 源标签。\n"
+        "- 不要把 Country / Risk / Price / value_score 这些本地字段作为主线"
+        "——它们只作背景，必要时一笔带过。\n"
+        "- 用户明示字数（如\"500 字\"）时优先满足；未明示给 4-8 句中长。\n"
+        "- 若 [LIVE-WEB] 段落空缺或几乎没内容，明确告知用户暂未检索到足够"
+        "的网上信息，不要编造。"
+    ),
+    "English": (
+        "INTENT: WEB SUMMARY — user explicitly requested information from "
+        "the web.\n"
+        "OUTPUT requirements:\n"
+        "- 4-8 sentences in flowing prose (NOT bullets, NOT a field list).\n"
+        "- The body of the answer comes from each supplier's [LIVE-WEB] "
+        "block ([web-search] / [web-fetch] data).\n"
+        "- Cite every web fact with its [web-search] or [web-fetch] tag.\n"
+        "- Do NOT lead with Country / Risk / Price / value_score — local "
+        "fields are background only, mention them only if needed for "
+        "context.\n"
+        "- Match any user-specified length; otherwise aim for 4-8 sentences.\n"
+        "- If the [LIVE-WEB] sections are empty or near-empty, say so "
+        "plainly — do NOT invent web findings."
+    ),
+}
+
+
 # Conditional tail — only attached when the user's question touches data
 # we structurally don't have (price / MOQ / lead time), AND the intent is
 # LOOKUP or RANK (so we're not redirecting an OPINION or COMPARE answer).
@@ -2100,43 +2138,62 @@ def ai_search(req: AiSearchRequest, db: Session = Depends(get_db)):
             turns.append(f"{role}: {t.content}")
         history_block = "\n\nCONVERSATION HISTORY (for context — the user may refer to earlier answers):\n" + "\n".join(turns)
 
-    intent_override = _INTENT_PROMPT_OVERRIDE.get(chat_intent, _INTENT_PROMPT_OVERRIDE["FIND"])
-
-    # --- OPINION verdict layer -----------------------------------------
-    # Code-side decides whether to recommend, hedge, or redirect (single
-    # / multi-supplier branching is here, not in the prompt). The LLM
-    # only writes prose; the verdict shape is system-determined.
+    # When the user explicitly asked for web information, REPLACE the
+    # per-intent template entirely with the WEB_SUMMARY template. We can't
+    # just prepend an "override" warning because the per-intent template
+    # contains specific shape rules (e.g. COMPARE: "Cover Country, Risk,
+    # Price, and one distinguishing field") and empirically the LLM follows
+    # the more specific instruction even when an earlier section says
+    # "this is ABSOLUTE". Removing the conflicting template is the only
+    # deterministic fix.
     verdict_decision: dict = {"mode": "SINGLE"}
-    if chat_intent == "OPINION":
-        verdict_decision = _decide_verdict_mode(suppliers, effective_query)
-        verdict_block = _VERDICT_BLOCKS.get(
-            verdict_decision["mode"], _VERDICT_BLOCKS["SINGLE"]
+    if _user_web_requested:
+        intent_override = _WEB_SUMMARY_OVERRIDE_TEMPLATES.get(
+            detected_lang, _WEB_SUMMARY_OVERRIDE_TEMPLATES["English"]
         )
-        if verdict_decision["mode"] == "RECOMMEND":
-            verdict_block = verdict_block.replace(
-                "{VERDICT_LINE}",
-                _render_verdict_line(
-                    verdict_decision["winner"].supplier_name or "",
-                    verdict_decision["reasons"],
-                    detected_lang,
-                ),
-            )
-        intent_override = intent_override.replace("{VERDICT_BLOCK}", verdict_block)
-        _log.info(
-            "[ai-search] verdict mode=%s n=%d reasons=%s",
-            verdict_decision["mode"], len(suppliers),
-            verdict_decision.get("reasons"),
+        verdict_decision = {"mode": "WEB_SUMMARY"}
+        _log.info("[ai-search] intent_override -> WEB_SUMMARY (user wants web)")
+    else:
+        intent_override = _INTENT_PROMPT_OVERRIDE.get(
+            chat_intent, _INTENT_PROMPT_OVERRIDE["FIND"]
         )
 
-    # OPINION template carries a {DEEP_REPORT_LINE} token that must be
-    # replaced with the language-matched redirect sentence BEFORE the prompt
-    # reaches the model. Other intents don't use the token; .replace() is a
-    # no-op for them. SINGLE and INSUFFICIENT_DATA verdict blocks contain
-    # this token; RECOMMEND and HEDGE do not.
-    intent_override = intent_override.replace(
-        "{DEEP_REPORT_LINE}",
-        _DEEP_REPORT_TEMPLATES.get(detected_lang, _DEEP_REPORT_TEMPLATES["English"]),
-    )
+        # --- OPINION verdict layer ---------------------------------
+        # Code-side decides whether to recommend, hedge, or redirect
+        # (single / multi-supplier branching is here, not in the
+        # prompt). The LLM only writes prose; the verdict shape is
+        # system-determined.
+        if chat_intent == "OPINION":
+            verdict_decision = _decide_verdict_mode(suppliers, effective_query)
+            verdict_block = _VERDICT_BLOCKS.get(
+                verdict_decision["mode"], _VERDICT_BLOCKS["SINGLE"]
+            )
+            if verdict_decision["mode"] == "RECOMMEND":
+                verdict_block = verdict_block.replace(
+                    "{VERDICT_LINE}",
+                    _render_verdict_line(
+                        verdict_decision["winner"].supplier_name or "",
+                        verdict_decision["reasons"],
+                        detected_lang,
+                    ),
+                )
+            intent_override = intent_override.replace("{VERDICT_BLOCK}", verdict_block)
+            _log.info(
+                "[ai-search] verdict mode=%s n=%d reasons=%s",
+                verdict_decision["mode"], len(suppliers),
+                verdict_decision.get("reasons"),
+            )
+
+        # OPINION template carries a {DEEP_REPORT_LINE} token that
+        # must be replaced with the language-matched redirect
+        # sentence BEFORE the prompt reaches the model. Other intents
+        # don't use the token; .replace() is a no-op for them.
+        # SINGLE and INSUFFICIENT_DATA verdict blocks contain this
+        # token; RECOMMEND and HEDGE do not.
+        intent_override = intent_override.replace(
+            "{DEEP_REPORT_LINE}",
+            _DEEP_REPORT_TEMPLATES.get(detected_lang, _DEEP_REPORT_TEMPLATES["English"]),
+        )
 
     prompt = f"""You are a supplier intelligence assistant.
 
