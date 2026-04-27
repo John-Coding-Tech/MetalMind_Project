@@ -2081,12 +2081,16 @@ def ai_search(req: AiSearchRequest, db: Session = Depends(get_db)):
     # Compare-mode: search every selected supplier (user picked the scope).
     # Explore-mode: cap at top-3 by value_score, same as the dimension-driven
     # path, to control Serper costs.
-    # Use effective_query (not req.query) so a follow-up like "300字总结"
-    # or "能继续总结的更详细一点么?" inherits the web-mode flag from the
-    # previous user turn the same way intent and filters do. Without this,
-    # web_mode silently falls off across follow-up turns even though the
-    # rest of conversation state was inherited correctly.
-    _user_web_requested = _user_wants_web(effective_query) and bool(suppliers)
+    # Web mode fires when EITHER the current query explicitly asks for
+    # web (e.g. "网上找寻更详细的信息"), OR the inherited query from a
+    # previous turn does (e.g. follow-up "300字总结" after "根据网上的资料
+    # ..."). Using only effective_query loses the case where the current
+    # turn explicitly says "网上" but the previous turn didn't; using only
+    # req.query loses the inheritance path. The framework here is:
+    #   decision = explicit_signal OR inherited_signal.
+    _user_web_requested = bool(suppliers) and (
+        _user_wants_web(req.query) or _user_wants_web(effective_query)
+    )
     if _user_web_requested:
         web_targets_for_user = (
             list(suppliers) if compare_mode else default_targets
