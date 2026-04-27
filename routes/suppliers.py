@@ -1182,16 +1182,7 @@ _INTENT_PROMPT_OVERRIDE: dict[str, str] = {
     ),
     "OPINION": (
         "INTENT: OPINION — user wants a judgment, assessment, or analysis.\n"
-        "OUTPUT: maximum 3 short sentences.\n"
-        "If the question requires data not available (e.g. future prospects, "
-        "market trends, financial health, recent news, industry analysis, "
-        "growth potential):\n"
-        "- First, give a brief assessment based ONLY on available supplier "
-        "data (1 sentence).\n"
-        "- Then, append the following sentence EXACTLY (verbatim, do not "
-        "translate the button name 'AI Deep Report'):\n"
-        "    {DEEP_REPORT_LINE}\n"
-        "The entire response MUST be in the required language.\n"
+        "{VERDICT_BLOCK}\n"
         "Do NOT include placeholders, bracketed text, or curly-brace tokens "
         "in your output. Do NOT invent industry analysis from generic "
         "knowledge. Do NOT speculate beyond what's in the supplier data. "
@@ -1207,6 +1198,249 @@ _INTENT_PROMPT_OVERRIDE: dict[str, str] = {
 _DEEP_REPORT_TEMPLATES: dict[str, str] = {
     "Chinese": "如需了解市场趋势和最新动态的深入分析，请点击 AI Deep Report 按钮。",
     "English": "For deeper analysis on market trends and recent news, click the AI Deep Report button.",
+}
+
+
+# ---------------------------------------------------------------------------
+# OPINION verdict layer — deterministic decision logic for multi-supplier
+# OPINION queries. Code-side computes the mode (RECOMMEND / HEDGE /
+# INSUFFICIENT_DATA / SINGLE) plus the winner and reasons; the LLM is only
+# responsible for writing the prose. Eligibility for RECOMMEND requires real
+# evidence-based differentiation — the rules here are the guardrails that
+# keep the LLM from inventing reasons on noisy data.
+# ---------------------------------------------------------------------------
+
+_RISK_RANK: dict[str, int] = {"low": 0, "medium": 1, "high": 2}
+
+# Phone or email regex — same pattern used by modules.cleaner._CONTACT_RE.
+_VERDICT_CONTACT_RE = re.compile(
+    r"\+?\d[\d\s\-()]{8,15}"
+    r"|[\w.+-]+@[\w-]+\.[\w.]+"
+)
+
+_VALUE_DIFF_THRESHOLD = 10.0   # min abs gap to count as a differentiator
+
+# Keywords that signal the user is asking about data we structurally don't
+# have (future / market / financial / news / industry analysis / growth).
+# Mirrors the OPINION prompt's earlier description of "data not available".
+_EXTERNAL_INSIGHT_KEYWORDS: list[str] = [
+    "future", "outlook", "prospect", "prospects", "trend", "trends",
+    "market", "financial", "finance", "news", "industry analysis", "growth",
+    "未来", "前景", "趋势", "市场", "财务", "新闻", "行业分析", "增长",
+]
+
+
+def _has_contact(s) -> bool:
+    """Phone or email present in the supplier's saved description."""
+    return bool(_VERDICT_CONTACT_RE.search(s.description or ""))
+
+
+def _requires_external_insight(query: str) -> bool:
+    if not query:
+        return False
+    q = query.lower()
+    return any(k in q for k in _EXTERNAL_INSIGHT_KEYWORDS)
+
+
+def _risk_rank(s) -> int:
+    return _RISK_RANK.get((s.risk_level or "").lower(), 99)
+
+
+def _value_of(s) -> float:
+    return float(s.value_score or 0.0)
+
+
+def _pick_winner(suppliers: list):
+    """
+    Deterministic winner selection: risk (lower) > contact (has) > value
+    (higher) > name (alphabetical, final tiebreak for stability).
+    """
+    # Stage 1: lowest risk
+    min_r = min(_risk_rank(s) for s in suppliers)
+    top = [s for s in suppliers if _risk_rank(s) == min_r]
+
+    # Stage 2: prefer suppliers with contact info, but only narrow if at
+    # least one in the current top set has it (otherwise everyone tied).
+    if any(_has_contact(s) for s in top):
+        top = [s for s in top if _has_contact(s)]
+
+    # Stage 3: highest value
+    max_v = max(_value_of(s) for s in top)
+    top = [s for s in top if _value_of(s) == max_v]
+
+    # Stage 4: alphabetical name — final stable tiebreak so result does
+    # not flip on input order.
+    return sorted(top, key=lambda s: (s.supplier_name or "").lower())[0]
+
+
+def _compute_reasons(suppliers: list, winner) -> list[str]:
+    """
+    Return reason codes (subset of {'risk', 'contact', 'value'}, max 2)
+    where the winner ACTUALLY occupies the favorable side AND a real diff
+    exists across suppliers. Order is priority order: risk > contact > value.
+    """
+    reasons: list[str] = []
+
+    risks = [_risk_rank(s) for s in suppliers]
+    if _risk_rank(winner) == min(risks) and any(r != _risk_rank(winner) for r in risks):
+        reasons.append("risk")
+
+    contacts = [_has_contact(s) for s in suppliers]
+    if _has_contact(winner) and any(not c for c in contacts):
+        reasons.append("contact")
+
+    values = [_value_of(s) for s in suppliers]
+    if _value_of(winner) == max(values) and (max(values) - min(values)) >= _VALUE_DIFF_THRESHOLD:
+        reasons.append("value")
+
+    return reasons[:2]
+
+
+_VERDICT_REASON_LABELS: dict[str, dict[str, str]] = {
+    "Chinese": {
+        "risk":    "风险更低",
+        "contact": "提供可验证的联系方式",
+        "value":   "价值评分明显更高",
+    },
+    "English": {
+        "risk":    "lower risk",
+        "contact": "verifiable contact information",
+        "value":   "a notably higher value score",
+    },
+}
+
+
+def _format_reasons_for_prompt(reasons: list[str], lang: str) -> str:
+    labels = _VERDICT_REASON_LABELS.get(lang, _VERDICT_REASON_LABELS["English"])
+    parts = [labels[r] for r in reasons if r in labels]
+    if not parts:
+        return ""
+    if lang == "Chinese":
+        return "且".join(parts)
+    if len(parts) == 1:
+        return parts[0]
+    return " and ".join(parts)
+
+
+def _render_verdict_line(winner_name: str, reasons: list[str], lang: str) -> str:
+    """
+    Pre-render the recommendation sentence in the user's language so the LLM
+    can copy it verbatim. Avoids putting bilingual templates inside the
+    prompt and getting the LLM to choose between them.
+    """
+    reasons_text = _format_reasons_for_prompt(reasons, lang)
+    if lang == "Chinese":
+        return f"建议优先选择 {winner_name}，因为其{reasons_text}。"
+    return f"Recommend {winner_name} because it has {reasons_text}."
+
+
+def _decide_verdict_mode(suppliers: list, query: str) -> dict:
+    """
+    Compute the verdict mode for an OPINION request.
+
+    Returns dict with at least {"mode": ...}; for RECOMMEND mode also
+    contains {"winner": <SavedSupplier>, "reasons": [str]}.
+
+    Modes:
+      SINGLE             — N == 1 (use existing single-supplier OPINION shape)
+      INSUFFICIENT_DATA  — N >= 2 AND query touches external-insight topic
+      HEDGE              — N >= 3, OR N == 2 with no real differentiator,
+                           OR pick_winner produced no valid reasons
+      RECOMMEND          — N == 2 with a real differentiator and ≥1 reason
+    """
+    n = len(suppliers)
+    if n <= 1:
+        return {"mode": "SINGLE"}
+
+    if _requires_external_insight(query):
+        return {"mode": "INSUFFICIENT_DATA"}
+
+    if n >= 3:
+        return {"mode": "HEDGE"}
+
+    # N == 2: check for any real differentiator
+    risks = [_risk_rank(s) for s in suppliers]
+    contacts = [_has_contact(s) for s in suppliers]
+    values = [_value_of(s) for s in suppliers]
+
+    risk_diff    = len(set(risks)) > 1
+    contact_diff = len(set(contacts)) > 1
+    value_diff   = (max(values) - min(values)) >= _VALUE_DIFF_THRESHOLD
+
+    if not (risk_diff or contact_diff or value_diff):
+        return {"mode": "HEDGE"}
+
+    winner = _pick_winner(suppliers)
+    reasons = _compute_reasons(suppliers, winner)
+
+    # Defensive: if pick_winner is correct this list is non-empty whenever
+    # at least one diff exists, but degrade to HEDGE rather than emit a
+    # reasonless recommendation if some future change breaks that property.
+    if not reasons:
+        return {"mode": "HEDGE"}
+
+    return {"mode": "RECOMMEND", "winner": winner, "reasons": reasons}
+
+
+# Per-mode body that fills the {VERDICT_BLOCK} slot in the OPINION prompt.
+# SINGLE keeps the prior single-supplier behavior (≤3 sentences + Deep Report
+# fallback). The multi-supplier modes IGNORE the 3-sentence cap and impose
+# an exact line shape so the LLM cannot drift back to free-form paragraphs.
+_VERDICT_BLOCKS: dict[str, str] = {
+    "SINGLE": (
+        "OUTPUT: maximum 3 short sentences.\n"
+        "If the question requires data not available (e.g. future prospects, "
+        "market trends, financial health, recent news, industry analysis, "
+        "growth potential):\n"
+        "- First, give a brief assessment based ONLY on available supplier "
+        "data (1 sentence).\n"
+        "- Then, append the following sentence EXACTLY (verbatim, do not "
+        "translate the button name 'AI Deep Report'):\n"
+        "    {DEEP_REPORT_LINE}\n"
+        "The entire response MUST be in the required language."
+    ),
+    "RECOMMEND": (
+        "OUTPUT: Multi-supplier mode. IGNORE the 3-sentence limit AND any "
+        "later instruction asking for a paragraph per supplier.\n"
+        "Produce EXACTLY N+1 short lines, separated by single newlines:\n"
+        "  - Lines 1..N: ONE line per supplier, in the order they appear "
+        "in the data, format '<supplier name>: <one short clause about "
+        "risk level, contact information, or value score>'. Each line must "
+        "be ONE clause — not multiple sentences, not a paragraph.\n"
+        "  - Line N+1 (verdict): copy the following sentence VERBATIM, "
+        "with no edits, no extra reasons, no rephrasing:\n"
+        "        {VERDICT_LINE}\n"
+        "Do NOT add extra sentences before, between, or after these N+1 "
+        "lines. The entire response MUST be in the required language."
+    ),
+    "HEDGE": (
+        "OUTPUT: Multi-supplier mode. IGNORE the 3-sentence limit AND any "
+        "later instruction asking for a paragraph per supplier.\n"
+        "Produce EXACTLY N+1 short lines, separated by single newlines:\n"
+        "  - Lines 1..N: ONE line per supplier, in the order they appear "
+        "in the data, format '<supplier name>: <one short clause about "
+        "risk level, contact information, or value score>'. Each line must "
+        "be ONE clause — not multiple sentences, not a paragraph.\n"
+        "  - Line N+1 (verdict): a single short sentence stating the "
+        "suppliers are comparable. If ONE concrete difference exists you "
+        "may name it in one short clause; if no concrete difference "
+        "exists, do NOT invent one — say the choice should depend on the "
+        "user's project requirements. Do NOT recommend any specific "
+        "supplier on this line.\n"
+        "Do NOT add extra sentences before, between, or after these N+1 "
+        "lines. The entire response MUST be in the required language."
+    ),
+    "INSUFFICIENT_DATA": (
+        "OUTPUT: Output EXACTLY 2 lines, no more, no less. Do NOT list "
+        "per-supplier details. Do NOT recommend any specific supplier.\n"
+        "Line 1: a single sentence stating the question (future outlook / "
+        "market trend / financial health / recent news / etc.) cannot be "
+        "assessed from the current supplier data.\n"
+        "Line 2 (verbatim, do not translate the button name 'AI Deep "
+        "Report'):\n"
+        "    {DEEP_REPORT_LINE}\n"
+        "The entire response MUST be in the required language."
+    ),
 }
 
 
@@ -1652,10 +1886,38 @@ def ai_search(req: AiSearchRequest, db: Session = Depends(get_db)):
         history_block = "\n\nCONVERSATION HISTORY (for context — the user may refer to earlier answers):\n" + "\n".join(turns)
 
     intent_override = _INTENT_PROMPT_OVERRIDE.get(chat_intent, _INTENT_PROMPT_OVERRIDE["FIND"])
+
+    # --- OPINION verdict layer -----------------------------------------
+    # Code-side decides whether to recommend, hedge, or redirect (single
+    # / multi-supplier branching is here, not in the prompt). The LLM
+    # only writes prose; the verdict shape is system-determined.
+    verdict_decision: dict = {"mode": "SINGLE"}
+    if chat_intent == "OPINION":
+        verdict_decision = _decide_verdict_mode(suppliers, req.query)
+        verdict_block = _VERDICT_BLOCKS.get(
+            verdict_decision["mode"], _VERDICT_BLOCKS["SINGLE"]
+        )
+        if verdict_decision["mode"] == "RECOMMEND":
+            verdict_block = verdict_block.replace(
+                "{VERDICT_LINE}",
+                _render_verdict_line(
+                    verdict_decision["winner"].supplier_name or "",
+                    verdict_decision["reasons"],
+                    detected_lang,
+                ),
+            )
+        intent_override = intent_override.replace("{VERDICT_BLOCK}", verdict_block)
+        _log.info(
+            "[ai-search] verdict mode=%s n=%d reasons=%s",
+            verdict_decision["mode"], len(suppliers),
+            verdict_decision.get("reasons"),
+        )
+
     # OPINION template carries a {DEEP_REPORT_LINE} token that must be
     # replaced with the language-matched redirect sentence BEFORE the prompt
     # reaches the model. Other intents don't use the token; .replace() is a
-    # no-op for them.
+    # no-op for them. SINGLE and INSUFFICIENT_DATA verdict blocks contain
+    # this token; RECOMMEND and HEDGE do not.
     intent_override = intent_override.replace(
         "{DEEP_REPORT_LINE}",
         _DEEP_REPORT_TEMPLATES.get(detected_lang, _DEEP_REPORT_TEMPLATES["English"]),
@@ -1668,8 +1930,16 @@ def ai_search(req: AiSearchRequest, db: Session = Depends(get_db)):
 ================================================================
 {intent_override}
 
-This intent block OVERRIDES verbosity rules below. Stay within the
-length limit even when the FORMAT JSON has fields that could hold more.
+⚠ THIS INTENT BLOCK IS ABSOLUTE.
+It overrides EVERY output-shape rule below, including:
+  - the "≤3 sentences" length cap
+  - the "give a paragraph per supplier" guidance in FORMAT B
+  - any other verbosity / structure hint anywhere in this prompt
+If the intent block above says "one short clause per supplier + one
+verdict line", produce EXACTLY that — even if FORMAT B asks for
+paragraphs. The FORMAT A/B/C JSON schemas are just envelopes; the
+prose inside the chosen schema's text field MUST follow the intent
+block's shape. Do NOT lengthen, shorten, restructure, or merge lines.
 ================================================================
 
 Each supplier below is presented in up to six data layers:
@@ -1805,11 +2075,11 @@ FORMAT A — recommendation:
 FORMAT B — info:
 {{
   "type": "info",
-  "answer": "PLAIN STRING with line breaks. For assessment / overview /
-             '你觉得怎么样' style questions, give a short paragraph for
-             EACH in-scope supplier (use supplier name as a sub-heading).
-             For narrow factual questions, answer directly about just the
-             supplier(s) asked. Tag every fact with its [source-tag].",
+  "answer": "PLAIN STRING with line breaks. Follow the EXACT shape and
+             length mandated by the intent block at the top of this prompt
+             (do not lengthen, restructure, or add per-supplier paragraphs
+             beyond what the intent block specifies). Tag every fact with
+             its [source-tag].",
   "highlights": ["supplier_name_1", "supplier_name_2"]
 }}
 
@@ -1872,6 +2142,12 @@ Output ONLY the JSON object. No markdown, no extra text."""
                 "post": len(suppliers),
                 "names": [s.supplier_name for s in suppliers],
                 "trace": _debug_filter_trace,
+            },
+            "_debug_verdict": {
+                "mode":    verdict_decision.get("mode"),
+                "winner":  (verdict_decision["winner"].supplier_name
+                            if verdict_decision.get("winner") is not None else None),
+                "reasons": verdict_decision.get("reasons"),
             },
             "results":     [_to_dict(s) for s in suppliers],
         }
