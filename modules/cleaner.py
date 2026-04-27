@@ -534,9 +534,60 @@ def _extract_price(
     return not_found
 
 
+# SEO suffix patterns to strip from supplier names. ALL must be anchored
+# to end-of-string ($) so they only trim trailing junk and never touch the
+# name's main body. Examples handled:
+#   "Acme Co - China Copper Sheet Manufacturers and Factory, Suppliers"
+#       \u2192 "Acme Co - China Copper Sheet"  (when matched after | / - splitter)
+#   "Jinbaicheng Metal, Suppliers"            \u2192 "Jinbaicheng Metal"
+#   "ACP Manufacturer, Wholesale Best Quality" \u2192 "ACP Manufacturer"
+#   "Steel Co (ISO Certified)"                \u2192 "Steel Co"
+_SEO_SUFFIX_PATTERNS = [
+    re.compile(r",\s*suppliers?\s*$", re.IGNORECASE),
+    re.compile(r"\s+manufacturers?\s*(and|&)?\s*factor(y|ies)[\s,]*$", re.IGNORECASE),
+    re.compile(r"\s+factor(y|ies)\s*(and|&)?\s*manufacturers?[\s,]*$", re.IGNORECASE),
+    re.compile(r"[,\-\s]+wholesale[\s\w]*$", re.IGNORECASE),
+    re.compile(r"[,\-\s]+factory\s*price[\s\w]*$", re.IGNORECASE),
+    re.compile(r"[,\-\s]+best\s+(quality|price)[\s\w]*$", re.IGNORECASE),
+    re.compile(r"[,\-\s]+(top|leading)\s+(china|chinese)[\s\w]*$", re.IGNORECASE),
+    # Trailing parenthesized claims: "(ISO Certified)", "(Hot Sale)", etc.
+    re.compile(r"\s*\((?:[^)]*?)\)\s*$"),
+]
+
+
+def clean_supplier_name(raw: str) -> str:
+    """
+    Strip SEO marketing suffixes from a scraped page title.
+    Idempotent \u2014 calling twice produces the same output as once.
+    Never returns empty unless input is empty (caller's job to fall back).
+    """
+    if not raw:
+        return ""
+    cleaned = raw
+    # Apply each pattern up to twice in case nested suffixes (e.g.
+    # "Acme Co (ISO), Suppliers" \u2192 strip parens \u2192 strip suppliers)
+    for _ in range(2):
+        before = cleaned
+        for pat in _SEO_SUFFIX_PATTERNS:
+            cleaned = pat.sub("", cleaned)
+        if cleaned == before:
+            break
+    # Final tidy: collapse whitespace + strip residual punctuation/hyphens
+    cleaned = re.sub(r"\s+", " ", cleaned).strip(" ,:;-")
+    return cleaned
+
+
 def _extract_name(title: str, url: str) -> str:
     """Best-effort supplier name from title or domain."""
     name = re.sub(r"\s*[\|\-\u2013\u2014]\s*.+$", "", title).strip()
+
+    # Strip SEO marketing suffixes ("..., Suppliers", "(ISO Certified)", etc.)
+    cleaned = clean_supplier_name(name)
+    # Only accept the cleaned version if it's still substantial
+    # (avoid "Aldura Industries" \u2192 "" via overzealous patterns).
+    if cleaned and len(cleaned) >= 3:
+        name = cleaned
+
     if len(name) < 3:
         domain = re.sub(r"https?://(www\.)?", "", url).split("/")[0]
         name = domain.split(".")[0].title()
