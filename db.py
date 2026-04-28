@@ -5,7 +5,7 @@ Uses DATABASE_URL (Railway provides this). Falls back to SQLite for local dev.
 
 import os
 import logging
-from sqlalchemy import create_engine, inspect, text
+from sqlalchemy import create_engine, event, inspect, text
 from sqlalchemy.exc import OperationalError, ProgrammingError
 from sqlalchemy.orm import sessionmaker, declarative_base
 
@@ -26,6 +26,28 @@ if DATABASE_URL.startswith("postgres://"):
 engine = create_engine(DATABASE_URL, pool_pre_ping=True)
 SessionLocal = sessionmaker(bind=engine, autocommit=False, autoflush=False)
 Base = declarative_base()
+
+
+# When the DB is SQLite, force WAL journaling on every new connection. WAL
+# is dramatically more crash-safe than the default DELETE journal mode and
+# is the standard recommendation for any SQLite DB that survives between
+# process restarts. synchronous=NORMAL is the WAL companion that keeps
+# fsync overhead low while still being durable through OS crashes.
+#
+# This is layered defense — the primary fix for the 2026-04-28 corruption
+# incident was moving the DB out of the Synology sync dir. WAL is the
+# secondary protection against any future cloud-sync / antivirus / similar
+# external writers.
+if engine.url.drivername.startswith("sqlite"):
+    @event.listens_for(engine, "connect")
+    def _enable_sqlite_wal(dbapi_conn, _conn_record):
+        cursor = dbapi_conn.cursor()
+        try:
+            cursor.execute("PRAGMA journal_mode=WAL;")
+            cursor.execute("PRAGMA synchronous=NORMAL;")
+            cursor.execute("PRAGMA foreign_keys=ON;")
+        finally:
+            cursor.close()
 
 
 def get_db():
@@ -82,6 +104,6 @@ def _migrate_saved_suppliers():
 
 
 def init_db():
-    from models import SavedSupplier, SupplierAttachment  # noqa: F401
+    from models import SavedSupplier, SupplierAttachment, SupplierEmail  # noqa: F401
     Base.metadata.create_all(bind=engine)
     _migrate_saved_suppliers()
