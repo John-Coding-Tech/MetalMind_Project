@@ -53,6 +53,7 @@ from modules.currency       import get_rates
 from config                 import DECISION_SCORE_THRESHOLD, ANALYZE_TOTAL_BUDGET, DISPLAY_SUPPLIER_LIMIT
 from db import init_db
 from routes.suppliers import router as suppliers_router
+from routes.supplier_emails import router as supplier_emails_router
 
 app = FastAPI(title="MetalMind API")
 
@@ -89,6 +90,7 @@ async def _global_exception_handler(request: Request, exc: Exception):
 
 
 app.include_router(suppliers_router)
+app.include_router(supplier_emails_router)
 
 
 @app.on_event("startup")
