@@ -270,8 +270,10 @@ document.addEventListener("DOMContentLoaded", () => {
   });
 
   wireAttachments();
+  wireEmailLog();
   loadSupplier();
   loadAttachments();
+  loadEmails();
 });
 
 
@@ -414,5 +416,435 @@ function wireAttachments() {
     input.value = "";       // reset so selecting the same file again re-triggers change
     btn.disabled = false;
     await loadAttachments();
+  });
+}
+
+
+// ---------------------------------------------------------------------------
+// Email Log — RFQ outbound + supplier reply tracking
+// Mirrors the loadX → renderX → wireX pattern used by Attachments.
+// ---------------------------------------------------------------------------
+
+// Held in module scope so optimistic-update handlers can mutate without
+// re-fetching from the server every keystroke. Refreshed by loadEmails().
+let _emailRows = [];
+let _composeDraft = null;   // last AI-generated FORMAT D payload, NOT yet saved
+
+function _fmtEmailTime(iso) {
+  if (!iso) return "";
+  const d = new Date(iso);
+  if (isNaN(d.getTime())) return iso;
+  // Local time, short: "2026-04-28 20:30"
+  const yyyy = d.getFullYear();
+  const mm   = String(d.getMonth() + 1).padStart(2, "0");
+  const dd   = String(d.getDate()).padStart(2, "0");
+  const hh   = String(d.getHours()).padStart(2, "0");
+  const mi   = String(d.getMinutes()).padStart(2, "0");
+  return `${yyyy}-${mm}-${dd} ${hh}:${mi}`;
+}
+
+async function loadEmails() {
+  try {
+    const resp = await fetch(`/api/suppliers/${SUPPLIER_ID}/emails`);
+    if (!resp.ok) throw new Error(`status=${resp.status}`);
+    _emailRows = await resp.json();
+    renderEmails(_emailRows);
+  } catch (e) {
+    console.error("Failed to load emails:", e);
+    const list = document.getElementById("email-log-list");
+    if (list) list.innerHTML = `<li class="email-log-empty">Failed to load emails.</li>`;
+  }
+}
+
+function renderEmails(items) {
+  const list = document.getElementById("email-log-list");
+  if (!list) return;
+  list.innerHTML = "";
+
+  if (!items || items.length === 0) {
+    const empty = document.createElement("li");
+    empty.className = "email-log-empty";
+    empty.textContent = "No emails yet. Click Compose new email or Log inbound reply to start.";
+    list.appendChild(empty);
+    return;
+  }
+
+  for (const e of items) {
+    list.appendChild(_buildEmailCard(e));
+  }
+}
+
+function _buildEmailCard(e) {
+  const li = document.createElement("li");
+  li.className = `email-card email-card--${e.state}`;
+  li.dataset.emailId = e.id;
+
+  // Time displayed depends on state
+  let timeStr = "";
+  if (e.state === "draft")   timeStr = `Draft · created ${_fmtEmailTime(e.created_at)}`;
+  if (e.state === "sent")    timeStr = `Sent ${_fmtEmailTime(e.sent_at)}`;
+  if (e.state === "inbound") timeStr = `Received ${_fmtEmailTime(e.received_at)}`;
+  const aiTag = e.ai_generated ? " · AI-drafted" : "";
+
+  // State badge text
+  const badgeLabel = e.state.toUpperCase();
+
+  // Action buttons — only Mark sent for drafts; everything has Delete
+  let actionsHtml = "";
+  if (e.state === "draft") {
+    actionsHtml += `<button type="button" class="email-mark-sent-btn">Mark sent</button>`;
+  }
+  actionsHtml += `<button type="button" class="email-delete-btn" aria-label="Delete">×</button>`;
+
+  li.innerHTML = `
+    <div class="email-card-row">
+      <div class="email-card-header">
+        <div class="email-card-title">${_escapeHtml(e.subject || "(no subject)")}</div>
+        <div class="email-card-meta">
+          <span class="email-state-badge email-state-badge--${e.state}">${badgeLabel}</span>
+          <span>${_escapeHtml(timeStr)}${aiTag}</span>
+        </div>
+      </div>
+      <div class="email-card-actions">${actionsHtml}</div>
+    </div>
+    <div class="email-card-body" hidden>${_escapeHtml(e.body || "")}</div>
+  `;
+
+  // Click on header (only) toggles body
+  const header = li.querySelector(".email-card-header");
+  const body   = li.querySelector(".email-card-body");
+  header.addEventListener("click", () => {
+    body.hidden = !body.hidden;
+  });
+
+  // Mark sent (optimistic — UI updates immediately, then PATCH; revert on failure)
+  const markBtn = li.querySelector(".email-mark-sent-btn");
+  if (markBtn) {
+    markBtn.addEventListener("click", async (ev) => {
+      ev.stopPropagation();
+      const sentAt = new Date().toISOString();
+      // Optimistic: rewrite the local row + re-render this card
+      const idx = _emailRows.findIndex(r => r.id === e.id);
+      if (idx >= 0) {
+        const updated = { ..._emailRows[idx], state: "sent", sent_at: sentAt };
+        _emailRows[idx] = updated;
+        const newCard = _buildEmailCard(updated);
+        li.replaceWith(newCard);
+      }
+      try {
+        const resp = await fetch(`/api/supplier-emails/${e.id}`, {
+          method: "PATCH",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ sent_at: sentAt }),
+        });
+        if (!resp.ok) throw new Error(`status=${resp.status}`);
+        // Sync from server (catch any clock drift / format normalisation)
+        await loadEmails();
+      } catch (err) {
+        console.error("Mark sent failed:", err);
+        alert("Failed to mark email as sent. Reloading list.");
+        await loadEmails();
+      }
+    });
+  }
+
+  // Delete (with confirm — destructive)
+  const delBtn = li.querySelector(".email-delete-btn");
+  if (delBtn) {
+    delBtn.addEventListener("click", async (ev) => {
+      ev.stopPropagation();
+      if (!confirm(`Delete email "${e.subject}"? This cannot be undone.`)) return;
+      try {
+        const resp = await fetch(`/api/supplier-emails/${e.id}`, { method: "DELETE" });
+        if (!resp.ok && resp.status !== 204) throw new Error(`status=${resp.status}`);
+        await loadEmails();
+      } catch (err) {
+        console.error("Delete failed:", err);
+        alert("Failed to delete email.");
+      }
+    });
+  }
+
+  return li;
+}
+
+// ---------------------------------------------------------------------------
+// Compose modal — AI draft via /api/ai-search EMAIL_DRAFT intent
+// ---------------------------------------------------------------------------
+
+function _openComposeModal() {
+  document.getElementById("compose-prompt").value = "";
+  document.getElementById("compose-status").textContent = "";
+  _resetComposeOutput();
+  _composeDraft = null;
+  document.getElementById("compose-email-modal").hidden = false;
+  document.body.classList.add("modal-open");
+}
+
+function _closeComposeModal() {
+  document.getElementById("compose-email-modal").hidden = true;
+  document.body.classList.remove("modal-open");
+}
+
+function _resetComposeOutput() {
+  const out = document.getElementById("compose-draft-card");
+  out.className = "compose-draft-empty";
+  out.innerHTML = "AI-drafted email will appear here.";
+}
+
+function _renderComposeDraft(draft) {
+  const out = document.getElementById("compose-draft-card");
+  out.className = "compose-draft-card";
+
+  const subjectEl = document.createElement("div");
+  subjectEl.className = "compose-draft-subject";
+  subjectEl.textContent = draft.subject || "(no subject)";
+
+  const bodyEl = document.createElement("div");
+  bodyEl.className = "compose-draft-body";
+  bodyEl.textContent = draft.body || "";
+
+  out.innerHTML = "";
+  out.appendChild(subjectEl);
+  out.appendChild(bodyEl);
+
+  if (Array.isArray(draft.highlights) && draft.highlights.length > 0) {
+    const ul = document.createElement("ul");
+    ul.className = "compose-draft-highlights";
+    for (const h of draft.highlights) {
+      const li = document.createElement("li");
+      li.textContent = h;
+      ul.appendChild(li);
+    }
+    out.appendChild(ul);
+  }
+
+  // 3 action buttons
+  const buttonsRow = document.createElement("div");
+  buttonsRow.className = "compose-draft-buttons";
+  buttonsRow.innerHTML = `
+    <button type="button" class="compose-mailto-btn">Open in Email</button>
+    <button type="button" class="compose-copy-btn">Copy</button>
+    <button type="button" class="compose-save-btn">Save to Log</button>
+  `;
+  out.appendChild(buttonsRow);
+
+  buttonsRow.querySelector(".compose-mailto-btn").addEventListener("click", () => {
+    const subject = encodeURIComponent(draft.subject || "");
+    const body    = encodeURIComponent(draft.body || "");
+    // No supplier email address yet — user pastes To:
+    window.location.href = `mailto:?subject=${subject}&body=${body}`;
+  });
+
+  buttonsRow.querySelector(".compose-copy-btn").addEventListener("click", async () => {
+    const text = `Subject: ${draft.subject || ""}\n\n${draft.body || ""}`;
+    try {
+      await navigator.clipboard.writeText(text);
+      document.getElementById("compose-status").textContent = "Copied to clipboard.";
+    } catch (err) {
+      console.error("Clipboard write failed:", err);
+      // Fallback: select text in a hidden textarea + execCommand
+      const ta = document.createElement("textarea");
+      ta.value = text;
+      document.body.appendChild(ta);
+      ta.select();
+      try { document.execCommand("copy"); } catch (_) { /* nothing more we can do */ }
+      ta.remove();
+      document.getElementById("compose-status").textContent = "Copied (fallback).";
+    }
+  });
+
+  buttonsRow.querySelector(".compose-save-btn").addEventListener("click", async (ev) => {
+    const btn = ev.currentTarget;
+    btn.disabled = true;
+    document.getElementById("compose-status").textContent = "Saving…";
+    try {
+      const resp = await fetch("/api/supplier-emails", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          supplier_id: Number(SUPPLIER_ID),
+          subject: draft.subject || "",
+          body:    draft.body || "",
+          direction: "outbound",
+          ai_generated: true,
+          // sent_at intentionally omitted — saved as draft until user marks sent
+        }),
+      });
+      if (!resp.ok) {
+        const errText = await resp.text();
+        throw new Error(`status=${resp.status} ${errText}`);
+      }
+      _closeComposeModal();
+      await loadEmails();
+    } catch (err) {
+      console.error("Save draft failed:", err);
+      btn.disabled = false;
+      document.getElementById("compose-status").textContent = "Save failed — see console.";
+    }
+  });
+}
+
+async function _generateDraft() {
+  const promptText = document.getElementById("compose-prompt").value.trim();
+  if (!promptText) {
+    document.getElementById("compose-status").textContent = "Type what kind of email you need.";
+    return;
+  }
+  const btn = document.getElementById("compose-generate-btn");
+  btn.disabled = true;
+  document.getElementById("compose-status").textContent = "Drafting…";
+
+  // Detect the user's input language so the wrapper trigger phrase
+  // matches it. Otherwise mixing Chinese + English in the prefix
+  // pollutes the backend's language-lock detection (which counts Chinese
+  // chars in the whole query) and makes English prompts produce Chinese
+  // emails (and vice versa). Both wrapper phrases ("起草邮件" / "draft
+  // email") are EMAIL_DRAFT trigger keywords, so intent classification
+  // still works either way.
+  const cnChars = (promptText.match(/[一-鿿]/g) || []).length;
+  const isUserChinese = cnChars >= 2;
+  const triggerPhrase = isUserChinese
+    ? (_composeDraft ? "继续起草邮件" : "起草邮件")
+    : (_composeDraft ? "refine email draft" : "draft email");
+  const wrappedQuery = `${triggerPhrase}: ${promptText}`;
+
+  try {
+    const resp = await fetch("/api/ai-search", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        query: wrappedQuery,
+        selected_ids: [Number(SUPPLIER_ID)],
+        // History carries the last draft as context for the LLM.
+        history: _composeDraft ? [
+          { role: "user",      content: wrappedQuery },
+          { role: "assistant", content: JSON.stringify(_composeDraft) },
+        ] : [],
+      }),
+    });
+    if (!resp.ok) throw new Error(`status=${resp.status}`);
+    const data = await resp.json();
+    const struct = data.structured || data.raw_structured;
+    if (!struct || struct.type !== "email_draft") {
+      throw new Error(`expected email_draft, got ${struct && struct.type}`);
+    }
+    _composeDraft = {
+      subject:    struct.subject    || "",
+      body:       struct.body       || "",
+      highlights: struct.highlights || [],
+    };
+    _renderComposeDraft(_composeDraft);
+    document.getElementById("compose-status").textContent = "";
+  } catch (err) {
+    console.error("Draft generation failed:", err);
+    document.getElementById("compose-status").textContent = "Draft failed — see console.";
+  } finally {
+    btn.disabled = false;
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Inbound modal — paste a supplier reply with editable timestamp
+// ---------------------------------------------------------------------------
+
+function _openInboundModal() {
+  document.getElementById("inbound-subject").value = "";
+  document.getElementById("inbound-body").value = "";
+  // datetime-local needs YYYY-MM-DDTHH:MM in the user's local zone
+  const now = new Date();
+  const tz = now.getTimezoneOffset() * 60000;
+  const localIso = new Date(now.getTime() - tz).toISOString().slice(0, 16);
+  document.getElementById("inbound-received-at").value = localIso;
+  document.getElementById("inbound-status").textContent = "";
+  document.getElementById("inbound-modal").hidden = false;
+  document.body.classList.add("modal-open");
+}
+
+function _closeInboundModal() {
+  document.getElementById("inbound-modal").hidden = true;
+  document.body.classList.remove("modal-open");
+}
+
+async function _saveInbound() {
+  const subject     = document.getElementById("inbound-subject").value.trim();
+  const body        = document.getElementById("inbound-body").value.trim();
+  const receivedRaw = document.getElementById("inbound-received-at").value;
+  const statusEl    = document.getElementById("inbound-status");
+
+  if (!subject || !body || !receivedRaw) {
+    statusEl.textContent = "Subject, body, and received_at are all required.";
+    return;
+  }
+
+  const btn = document.getElementById("inbound-save-btn");
+  btn.disabled = true;
+  statusEl.textContent = "Saving…";
+
+  try {
+    const receivedIso = new Date(receivedRaw).toISOString();
+    const resp = await fetch("/api/supplier-emails", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        supplier_id: Number(SUPPLIER_ID),
+        subject, body,
+        direction: "inbound",
+        received_at: receivedIso,
+      }),
+    });
+    if (!resp.ok) {
+      const errText = await resp.text();
+      throw new Error(`status=${resp.status} ${errText}`);
+    }
+    _closeInboundModal();
+    await loadEmails();
+  } catch (err) {
+    console.error("Inbound save failed:", err);
+    statusEl.textContent = "Save failed — see console.";
+  } finally {
+    btn.disabled = false;
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Wire-up entry point — called once on DOMContentLoaded
+// ---------------------------------------------------------------------------
+
+function wireEmailLog() {
+  const composeOpenBtn = document.getElementById("compose-email-btn");
+  const inboundOpenBtn = document.getElementById("log-inbound-btn");
+  if (composeOpenBtn) composeOpenBtn.addEventListener("click", _openComposeModal);
+  if (inboundOpenBtn) inboundOpenBtn.addEventListener("click", _openInboundModal);
+
+  // Compose modal close + generate
+  const composeOverlay  = document.getElementById("compose-email-modal");
+  const composeCloseBtn = document.getElementById("compose-modal-close");
+  if (composeCloseBtn) composeCloseBtn.addEventListener("click", _closeComposeModal);
+  if (composeOverlay) {
+    composeOverlay.addEventListener("click", (e) => {
+      if (e.target === composeOverlay) _closeComposeModal();
+    });
+  }
+  const generateBtn = document.getElementById("compose-generate-btn");
+  if (generateBtn) generateBtn.addEventListener("click", _generateDraft);
+
+  // Inbound modal close + save
+  const inboundOverlay  = document.getElementById("inbound-modal");
+  const inboundCloseBtn = document.getElementById("inbound-modal-close");
+  if (inboundCloseBtn) inboundCloseBtn.addEventListener("click", _closeInboundModal);
+  if (inboundOverlay) {
+    inboundOverlay.addEventListener("click", (e) => {
+      if (e.target === inboundOverlay) _closeInboundModal();
+    });
+  }
+  const inboundSaveBtn = document.getElementById("inbound-save-btn");
+  if (inboundSaveBtn) inboundSaveBtn.addEventListener("click", _saveInbound);
+
+  // Escape closes any open modal
+  document.addEventListener("keydown", (e) => {
+    if (e.key !== "Escape") return;
+    if (!document.getElementById("compose-email-modal").hidden) _closeComposeModal();
+    if (!document.getElementById("inbound-modal").hidden)        _closeInboundModal();
   });
 }

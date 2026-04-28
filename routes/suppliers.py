@@ -1086,6 +1086,15 @@ def _fmt_attachments(s: SavedSupplier, atts: list[SupplierAttachment]) -> str:
 
 _INTENT_KEYWORDS: list[tuple[str, list[str]]] = [
     ("COMPARE", ["对比", "compare", " vs ", " versus ", "和.*哪个", "head-to-head"]),
+    # EMAIL_DRAFT comes BEFORE LOOKUP — LOOKUP has "email" / "phone" as keywords
+    # for "what's their email", but "draft email" / "写邮件" should route to
+    # EMAIL_DRAFT instead. Compound phrases avoid bare "邮件" / "email".
+    ("EMAIL_DRAFT", [
+        "写邮件", "起草邮件", "拟邮件", "起草一封邮件", "写一封邮件",
+        "询价邮件", "邮件草稿",
+        "draft an email", "draft email", "compose an email", "compose email",
+        "write an email", "email draft", "rfq email", "quote request email",
+    ]),
     ("OPINION", ["为什么", "why ", "靠谱吗", "可信", "你觉得", "think", "your opinion",
                  "好不好", "怎么样",
                  # +Bug 1 fix: analysis / future / assessment intents
@@ -1187,6 +1196,42 @@ _INTENT_PROMPT_OVERRIDE: dict[str, str] = {
         "in your output. Do NOT invent industry analysis from generic "
         "knowledge. Do NOT speculate beyond what's in the supplier data. "
         "Avoid hedging language ('might', 'could', 'perhaps')."
+    ),
+    "EMAIL_DRAFT": (
+        "INTENT: EMAIL_DRAFT — user wants an email drafted to a specific "
+        "supplier (typically an RFQ / quote request).\n"
+        "\n"
+        "CRITICAL — LANGUAGE: The email body, subject, and highlights MUST "
+        "be in the language locked at the top of the scope note. If the "
+        "scope note says 'REPLY STRICTLY IN CHINESE', write the email in "
+        "Chinese — including greeting, body, sign-off, and highlights. Do "
+        "NOT default to English just because email conventions feel "
+        "English-flavoured. A Chinese supplier expects a Chinese email.\n"
+        "\n"
+        "FOLLOW-UP HANDLING: If CONVERSATION HISTORY (later in this prompt) "
+        "contains a previous assistant turn with an email_draft JSON, the "
+        "user's current message is a REFINEMENT of that draft — adjust the "
+        "existing subject/body/highlights to address the user's new "
+        "request, do NOT start a fresh draft from scratch. Preserve "
+        "everything the user didn't ask to change.\n"
+        "\n"
+        "OUTPUT: ignore ALL length / shape / verdict rules from other "
+        "intents. You MUST return a JSON object of type 'email_draft' "
+        "(FORMAT D). The FORMAT A / B / C envelopes do NOT apply.\n"
+        "  - subject: concise (≤ 80 chars), describes the request.\n"
+        "  - body: properly-structured email with culturally-appropriate "
+        "greeting (use the supplier's name when available), 1-3 short "
+        "paragraphs of the request, and a professional sign-off with a "
+        "[Your name] / [您的姓名] placeholder. Use real \\n line breaks. "
+        "Tone: business formal, polite, direct.\n"
+        "  - highlights: 3-5 SHORT phrases (≤ 8 words each), action-"
+        "oriented, in the SAME language as the body. Describe what the "
+        "email covers or what the user might want to add. Use action "
+        "verbs ('request', 'ask for', 'specify' / '询问', '要求', '注明'), "
+        "not topical labels.\n"
+        "\n"
+        "Do NOT speculate about prices, MOQs, or commercial terms not "
+        "present in the supplier data."
     ),
 }
 
@@ -1935,10 +1980,18 @@ def ai_search(req: AiSearchRequest, db: Session = Depends(get_db)):
     effective_query = _prev_query if followup_mode else req.query
 
     # --- Intent classifier (#1) — drives the per-intent output prompt ---
-    # Order: COMPARE > OPINION > RANK > LOOKUP > FIND. Compare-mode (user
-    # ticked specific suppliers) hard-overrides to COMPARE because that's
-    # the explicit user signal.
-    chat_intent = "COMPARE" if compare_mode else _classify_chat_intent(effective_query)
+    # Order: COMPARE > EMAIL_DRAFT > OPINION > RANK > LOOKUP > FIND.
+    # Compare-mode (user ticked specific suppliers) normally hard-overrides
+    # to COMPARE — but EMAIL_DRAFT is an exception. The Compose Email modal
+    # always sends selected_ids=[supplier_id] (so compare_mode=True), AND a
+    # query like "起草一封询价邮件". We want EMAIL_DRAFT to win, otherwise
+    # the email feature is unreachable. So: classify first; force COMPARE
+    # only when the classifier didn't already pick EMAIL_DRAFT.
+    _classified_intent = _classify_chat_intent(effective_query)
+    if compare_mode and _classified_intent != "EMAIL_DRAFT":
+        chat_intent = "COMPARE"
+    else:
+        chat_intent = _classified_intent
     _log.info(
         "[ai-search] intent=%s followup=%s query=%r effective=%r",
         chat_intent, followup_mode, req.query[:80], effective_query[:80],
@@ -2169,7 +2222,15 @@ def ai_search(req: AiSearchRequest, db: Session = Depends(get_db)):
     # "this is ABSOLUTE". Removing the conflicting template is the only
     # deterministic fix.
     verdict_decision: dict = {"mode": "SINGLE"}
-    if _user_web_requested:
+    if chat_intent == "EMAIL_DRAFT":
+        # EMAIL_DRAFT wins over WEB_SUMMARY when both could fire — drafting
+        # an RFQ doesn't need web summarisation prose, even if the user
+        # mentioned "网上" while asking for the draft. The EMAIL_DRAFT
+        # template carries its own FORMAT D output requirement.
+        intent_override = _INTENT_PROMPT_OVERRIDE["EMAIL_DRAFT"]
+        verdict_decision = {"mode": "EMAIL_DRAFT"}
+        _log.info("[ai-search] intent_override -> EMAIL_DRAFT")
+    elif _user_web_requested:
         intent_override = _WEB_SUMMARY_OVERRIDE_TEMPLATES.get(
             detected_lang, _WEB_SUMMARY_OVERRIDE_TEMPLATES["English"]
         )
@@ -2352,6 +2413,11 @@ Classify the question first:
                      "tell me about them", "你觉得怎么样", "介绍一下"). In
                      this case discuss EVERY in-scope supplier, not just one.
   "mixed"          — both recommend AND give info
+  "email_draft"    — user asked you to draft an email to a supplier (RFQ /
+                     quote request / 写邮件). When the intent block at the
+                     top of this prompt says EMAIL_DRAFT, you MUST use this
+                     classification and return FORMAT D — the FORMAT A/B/C
+                     envelopes do NOT apply.
 
 FORMAT A — recommendation:
 {{
@@ -2389,6 +2455,19 @@ FORMAT C — mixed:
   "info": "PLAIN STRING with line breaks and source tags.",
   "summary": "Short sentence tying it together.",
   "highlights": ["supplier_name_1"]
+}}
+
+FORMAT D — email_draft (use this WHEN AND ONLY WHEN the intent block
+above is EMAIL_DRAFT):
+{{
+  "type": "email_draft",
+  "subject": "<concise subject describing the request, ≤80 chars>",
+  "body": "<full email body in the LANGUAGE LOCKED ABOVE. Greeting using "
+          "supplier's name + 1-3 short paragraphs of request + sign-off "
+          "with [Your name] placeholder. Use \\n for line breaks. The body "
+          "MUST be written in the user's language (do NOT default to "
+          "English when the user wrote in Chinese).>",
+  "highlights": ["<short action phrase>", "<short action phrase>", "<short action phrase>"]
 }}
 
 Output ONLY the JSON object. No markdown, no extra text."""

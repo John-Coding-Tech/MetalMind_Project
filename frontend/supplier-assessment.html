@@ -225,6 +225,18 @@
           <textarea class="assess-textarea" id="supplier-assistant-chat" rows="4" placeholder="Ask the AI about this supplier…" disabled></textarea>
         </section>
 
+        <!-- Email Log — RFQ outbound + supplier reply log per supplier. -->
+        <section class="assess-section">
+          <h2 class="assess-section-title">Email Log</h2>
+          <p class="assess-help-text">Track RFQs sent to this supplier and replies received. AI can draft outbound emails for you.</p>
+          <div class="email-log-actions">
+            <button type="button" class="btn-attachment" id="compose-email-btn">+ Compose new email</button>
+            <button type="button" class="btn-attachment" id="log-inbound-btn">+ Log inbound reply</button>
+            <span class="email-log-status" id="email-log-status"></span>
+          </div>
+          <ul class="email-log-list" id="email-log-list"></ul>
+        </section>
+
         <!-- Attachments — user-uploaded files; AI will use them for future analysis -->
         <section class="assess-section">
           <h2 class="assess-section-title">Attachments</h2>
@@ -239,6 +251,57 @@
 
       </div>
     </main>
+  </div>
+
+  <!-- Compose Email modal (AI draft → 3 actions) -->
+  <div class="modal-overlay" id="compose-email-modal" hidden>
+    <div class="modal modal-wide">
+      <div class="modal-header">
+        <h3>Compose Email</h3>
+        <button type="button" class="modal-close" id="compose-modal-close" aria-label="Close">×</button>
+      </div>
+      <div class="modal-body compose-body">
+        <div class="compose-input">
+          <label class="compose-label">What kind of email do you need?</label>
+          <textarea class="assess-textarea" id="compose-prompt" rows="3"
+            placeholder="e.g. 询价邮件，要求 MOQ 500 / draft an RFQ asking about lead time"></textarea>
+          <div class="compose-actions-row">
+            <button type="button" class="btn-attachment" id="compose-generate-btn">Generate draft</button>
+            <span class="compose-status" id="compose-status"></span>
+          </div>
+        </div>
+        <div class="compose-output">
+          <div id="compose-draft-card" class="compose-draft-empty">
+            AI-drafted email will appear here.
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Log Inbound Reply modal -->
+  <div class="modal-overlay" id="inbound-modal" hidden>
+    <div class="modal">
+      <div class="modal-header">
+        <h3>Log Inbound Reply</h3>
+        <button type="button" class="modal-close" id="inbound-modal-close" aria-label="Close">×</button>
+      </div>
+      <div class="modal-body">
+        <label class="compose-label">Subject</label>
+        <input type="text" id="inbound-subject" class="assess-input" placeholder="Re: RFQ ..." />
+
+        <label class="compose-label">Body (paste supplier reply)</label>
+        <textarea class="assess-textarea" id="inbound-body" rows="8" placeholder="Paste the supplier's reply here…"></textarea>
+
+        <label class="compose-label">Received at <span class="compose-help">(default = now, edit if pasting an older reply)</span></label>
+        <input type="datetime-local" id="inbound-received-at" class="assess-input" />
+
+        <div class="compose-actions-row">
+          <button type="button" class="btn-attachment" id="inbound-save-btn">Save inbound reply</button>
+          <span class="compose-status" id="inbound-status"></span>
+        </div>
+      </div>
+    </div>
   </div>
 
   <script src="/static/supplier-assessment.js"></script>
